@@ -1,0 +1,293 @@
+import "server-only";
+import { getDb } from "./db";
+
+export interface ClassificationCounts {
+  best: number;
+  great: number;
+  good: number;
+  inaccuracy: number;
+  mistake: number;
+  blunder: number;
+  miss: number;
+  book: number;
+  forced: number;
+  brilliant: number;
+}
+
+export interface PhaseStat {
+  moves: number;
+  blunders: number;
+  mistakes: number;
+  inaccuracies: number;
+  avgCpLoss: number;
+}
+
+export interface OpeningStat {
+  eco: string;
+  name: string;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  winRate: number;
+  avgAccuracy: number;
+}
+
+export interface WeaknessProfile {
+  totalGames: number;
+  analyzedGames: number;
+  totalPlayerMoves: number;
+  classification: ClassificationCounts;
+  phase: Record<string, PhaseStat>;
+  motifs: { motif: string; count: number }[];
+  timeManagement: {
+    lowTime: { moves: number; avgCpLoss: number };
+    normalTime: { moves: number; avgCpLoss: number };
+  };
+  openings: OpeningStat[];
+  color: {
+    white: { games: number; wins: number; draws: number; losses: number };
+    black: { games: number; wins: number; draws: number; losses: number };
+  };
+  accuracyTrend: { gameId: number; playedAt: string | null; accuracy: number | null }[];
+  summary: {
+    avgAccuracy: number | null;
+    blunderRate: number; // blunders per analyzed game
+    mostCommonMotif: string | null;
+    weakestPhase: string | null;
+  };
+}
+
+const EMPTY_CLASS: ClassificationCounts = {
+  best: 0,
+  great: 0,
+  good: 0,
+  inaccuracy: 0,
+  mistake: 0,
+  blunder: 0,
+  miss: 0,
+  book: 0,
+  forced: 0,
+  brilliant: 0,
+};
+
+function emptyProfile(totalGames: number, analyzedGames: number): WeaknessProfile {
+  return {
+    totalGames,
+    analyzedGames,
+    totalPlayerMoves: 0,
+    classification: { ...EMPTY_CLASS },
+    phase: {},
+    motifs: [],
+    timeManagement: {
+      lowTime: { moves: 0, avgCpLoss: 0 },
+      normalTime: { moves: 0, avgCpLoss: 0 },
+    },
+    openings: [],
+    color: {
+      white: { games: 0, wins: 0, draws: 0, losses: 0 },
+      black: { games: 0, wins: 0, draws: 0, losses: 0 },
+    },
+    accuracyTrend: [],
+    summary: { avgAccuracy: null, blunderRate: 0, mostCommonMotif: null, weakestPhase: null },
+  };
+}
+
+interface Row {
+  ply: number;
+  color: string;
+  classification: string | null;
+  motif: string | null;
+  phase: string | null;
+  centipawn_loss: number | null;
+  clock_seconds: number | null;
+  player_color: string;
+  eco: string;
+  opening_name: string;
+  result: string;
+  accuracy: number | null;
+  played_at: string | null;
+  game_id: number;
+}
+
+export function computeWeaknesses(): WeaknessProfile {
+  const db = getDb();
+  const totalGames = (db.prepare("SELECT COUNT(*) n FROM games").get() as { n: number }).n;
+  const analyzedGames = (db.prepare("SELECT COUNT(*) n FROM games WHERE analyzed = 1").get() as { n: number }).n;
+  const profile = emptyProfile(Number(totalGames), Number(analyzedGames));
+
+  const games = db
+    .prepare("SELECT * FROM games WHERE analyzed = 1 ORDER BY played_at ASC")
+    .all() as Record<string, unknown>[];
+
+  // Color performance + accuracy trend (per game).
+  for (const g of games) {
+    const result = String(g.result ?? "*");
+    const color = String(g.player_color);
+    const bucket = color === "w" ? profile.color.white : profile.color.black;
+    bucket.games += 1;
+    if (result === "1-0") {
+      if (color === "w") bucket.wins += 1;
+      else bucket.losses += 1;
+    } else if (result === "0-1") {
+      if (color === "b") bucket.wins += 1;
+      else bucket.losses += 1;
+    } else if (result === "1/2-1/2") {
+      bucket.draws += 1;
+    }
+    profile.accuracyTrend.push({
+      gameId: Number(g.id),
+      playedAt: g.played_at == null ? null : String(g.played_at),
+      accuracy: g.accuracy == null ? null : Number(g.accuracy),
+    });
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT p.ply, p.color, p.classification, p.motif, p.phase, p.centipawn_loss,
+              p.clock_seconds, g.player_color, g.eco, g.opening_name, g.result,
+              g.accuracy, g.played_at, g.id AS game_id
+       FROM positions p JOIN games g ON g.id = p.game_id
+       WHERE g.analyzed = 1 AND p.color = g.player_color`
+    )
+    .all() as unknown as Row[];
+
+  const motifCounts = new Map<string, number>();
+  const phaseAgg = new Map<string, { moves: number; blunders: number; mistakes: number; inaccuracies: number; cpSum: number }>();
+  const openingAgg = new Map<string, OpeningStat>();
+  let lowTimeMoves = 0;
+  let lowTimeCp = 0;
+  let normalTimeMoves = 0;
+  let normalTimeCp = 0;
+  let accSum = 0;
+  let accCount = 0;
+
+  for (const r of rows) {
+    profile.totalPlayerMoves += 1;
+    const cls = (r.classification ?? "") as keyof ClassificationCounts;
+    if (cls in profile.classification) profile.classification[cls] += 1;
+    if (r.classification === "blunder" || r.classification === "mistake" || r.classification === "miss") {
+      const motif = r.motif ?? "positional";
+      motifCounts.set(motif, (motifCounts.get(motif) ?? 0) + 1);
+    }
+
+    const phase = r.phase ?? "middlegame";
+    const pa = phaseAgg.get(phase) ?? { moves: 0, blunders: 0, mistakes: 0, inaccuracies: 0, cpSum: 0 };
+    pa.moves += 1;
+    if (r.classification === "blunder") pa.blunders += 1;
+    if (r.classification === "mistake") pa.mistakes += 1;
+    if (r.classification === "inaccuracy") pa.inaccuracies += 1;
+    if (r.centipawn_loss != null) pa.cpSum += r.centipawn_loss;
+    phaseAgg.set(phase, pa);
+
+    // Time management: "low time" = under 30 seconds remaining.
+    if (r.clock_seconds != null) {
+      if (r.clock_seconds < 30) {
+        lowTimeMoves += 1;
+        lowTimeCp += r.centipawn_loss ?? 0;
+      } else {
+        normalTimeMoves += 1;
+        normalTimeCp += r.centipawn_loss ?? 0;
+      }
+    }
+
+    // Opening performance (aggregate accuracy across the game's opening key).
+    const eco = r.eco || "?";
+    const oa = openingAgg.get(eco) ?? {
+      eco,
+      name: r.opening_name || eco,
+      games: 0,
+      wins: 0,
+      draws: 0,
+      losses: 0,
+      winRate: 0,
+      avgAccuracy: 0,
+    };
+    openingAgg.set(eco, oa);
+
+    if (r.accuracy != null) {
+      accSum += r.accuracy;
+      accCount += 1;
+    }
+  }
+
+  // Opening games/win-rate from the game table (once per game, not per move).
+  for (const g of games) {
+    const eco = String(g.eco ?? "?");
+    const name = String(g.opening_name ?? eco);
+    let oa = openingAgg.get(eco);
+    if (!oa) {
+      oa = { eco, name, games: 0, wins: 0, draws: 0, losses: 0, winRate: 0, avgAccuracy: 0 };
+      openingAgg.set(eco, oa);
+    }
+    oa.games += 1;
+    const result = String(g.result ?? "*");
+    const color = String(g.player_color);
+    const playerWon = (color === "w" && result === "1-0") || (color === "b" && result === "0-1");
+    const playerLost = (color === "w" && result === "0-1") || (color === "b" && result === "1-0");
+    if (playerWon) oa.wins += 1;
+    else if (playerLost) oa.losses += 1;
+    else if (result === "1/2-1/2") oa.draws += 1;
+  }
+
+  profile.phase = {};
+  for (const [phase, v] of phaseAgg) {
+    profile.phase[phase] = {
+      moves: v.moves,
+      blunders: v.blunders,
+      mistakes: v.mistakes,
+      inaccuracies: v.inaccuracies,
+      avgCpLoss: v.moves ? v.cpSum / v.moves : 0,
+    };
+  }
+
+  profile.motifs = [...motifCounts.entries()]
+    .map(([motif, count]) => ({ motif, count }))
+    .sort((a, b) => b.count - a.count);
+
+  profile.timeManagement = {
+    lowTime: {
+      moves: lowTimeMoves,
+      avgCpLoss: lowTimeMoves ? lowTimeCp / lowTimeMoves : 0,
+    },
+    normalTime: {
+      moves: normalTimeMoves,
+      avgCpLoss: normalTimeMoves ? normalTimeCp / normalTimeMoves : 0,
+    },
+  };
+
+  profile.openings = [...openingAgg.values()]
+    .map((o) => ({
+      ...o,
+      winRate: o.games ? Number(((o.wins / o.games) * 100).toFixed(1)) : 0,
+      avgAccuracy: 0,
+    }))
+    .filter((o) => o.games > 0)
+    .sort((a, b) => b.games - a.games)
+    .slice(0, 30);
+
+  // Per-opening average accuracy from the accuracy trend.
+  const accByEco = new Map<string, { sum: number; n: number }>();
+  for (const g of games) {
+    if (g.accuracy == null) continue;
+    const eco = String(g.eco ?? "?");
+    const cur = accByEco.get(eco) ?? { sum: 0, n: 0 };
+    cur.sum += Number(g.accuracy);
+    cur.n += 1;
+    accByEco.set(eco, cur);
+  }
+  profile.openings = profile.openings.map((o) => {
+    const a = accByEco.get(o.eco);
+    return { ...o, avgAccuracy: a && a.n ? a.sum / a.n : 0 };
+  });
+
+  profile.summary = {
+    avgAccuracy: accCount ? accSum / accCount : null,
+    blunderRate: analyzedGames ? profile.classification.blunder / analyzedGames : 0,
+    mostCommonMotif: profile.motifs[0]?.motif ?? null,
+    weakestPhase:
+      [...Object.entries(profile.phase)].sort((a, b) => b[1].avgCpLoss - a[1].avgCpLoss)[0]?.[0] ?? null,
+  };
+
+  return profile;
+}
