@@ -11,6 +11,7 @@ Coach — with **personalized puzzles built from your own mistakes**.
 | Feature | Description |
 |---|---|
 | **Game import** | Fetch your last N games from Lichess and Chess.com (public APIs, no key needed) into a local SQLite database. |
+| **Game library** | Search by player/opening/ECO and filter by site, speed, result, colour, analysed state, or date — paginated server-side. |
 | **Engine analysis** | Replays every position through Stockfish (UCI), computes centipawn loss, and classifies each move. |
 | **Move classification** | Book / forced / brilliant / best / great / good / inaccuracy / mistake / blunder / miss. |
 | **Coach feedback** | 2–3 sentence explanations of your critical moments, calibrated to your rating, that *never* contradict the engine. |

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import ImportForm from "@/components/ImportForm";
 import AnalysisQueue from "@/components/AnalysisQueue";
@@ -26,29 +26,71 @@ interface Game {
   total_plies: number;
 }
 
+const SPEEDS = ["bullet", "blitz", "rapid", "classical"];
+const PAGE_SIZES = [25, 50, 100, 200];
+
+const field =
+  "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
+
 export default function Home() {
   const [games, setGames] = useState<Game[]>([]);
+  const [total, setTotal] = useState(0);
+  const [analyzedInView, setAnalyzedInView] = useState(0);
+  const [pageCount, setPageCount] = useState(1);
+  const [pending, setPending] = useState(0);
   const [queuedIds, setQueuedIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+
+  // Filters
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [source, setSource] = useState("");
+  const [speed, setSpeed] = useState("");
+  const [result, setResult] = useState("");
+  const [color, setColor] = useState("");
+  const [analyzedFilter, setAnalyzedFilter] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
+  // Debounce the search box so typing doesn't fire a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(q), 300);
+    return () => clearTimeout(timer);
+  }, [q]);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/games");
-    const data = await res.json();
-    const list = (data.games as Game[]) || [];
-    setGames(list);
-    // Drop "queued" markers for games that have since been analysed.
-    setQueuedIds((prev) => {
-      if (prev.size === 0) return prev;
-      const next = new Set<number>();
-      for (const id of prev) {
-        const g = list.find((x) => x.id === id);
-        if (g && !g.analyzed) next.add(id);
-      }
-      return next;
-    });
-  }, []);
+    const params = new URLSearchParams();
+    if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
+    if (source) params.set("source", source);
+    if (speed) params.set("speed", speed);
+    if (result) params.set("result", result);
+    if (color) params.set("color", color);
+    if (analyzedFilter) params.set("analyzed", analyzedFilter);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+
+    const [gamesRes, statusRes] = await Promise.all([
+      fetch(`/api/games?${params.toString()}`),
+      fetch("/api/jobs/status"),
+    ]);
+    const data = await gamesRes.json();
+    const status = await statusRes.json();
+
+    setGames((data.games as Game[]) || []);
+    setTotal(Number(data.total ?? 0));
+    setAnalyzedInView(Number(data.analyzed ?? 0));
+    setPageCount(Number(data.pageCount ?? 1));
+    setPending(Number(status?.games?.pending ?? 0));
+    setQueuedIds(new Set<number>((status?.queuedGameIds as number[]) ?? []));
+    setLoading(false);
+  }, [debouncedQ, source, speed, result, color, analyzedFilter, from, to, page, pageSize]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch via a reusable loader
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch keyed by the active filters
     void load();
   }, [load]);
 
@@ -61,6 +103,16 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds }),
     });
+    await load();
+  }
+
+  async function enqueueAll() {
+    await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true }),
+    });
+    await load();
   }
 
   async function remove(id: number) {
@@ -68,9 +120,32 @@ export default function Home() {
     await load();
   }
 
-  const analyzed = games.filter((g) => g.analyzed).length;
-  const analyzable = games.filter((g) => !g.analyzed && g.total_plies > 0);
-  const emptyCount = games.filter((g) => g.total_plies === 0).length;
+  const filtersActive = Boolean(q || source || speed || result || color || analyzedFilter || from || to);
+
+  function clearFilters() {
+    setQ("");
+    setDebouncedQ("");
+    setSource("");
+    setSpeed("");
+    setResult("");
+    setColor("");
+    setAnalyzedFilter("");
+    setFrom("");
+    setTo("");
+    setPage(1);
+  }
+
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = Math.min(page * pageSize, total);
+  const pager = useMemo(
+    () => ({
+      first: () => setPage(1),
+      prev: () => setPage((p) => Math.max(1, p - 1)),
+      next: () => setPage((p) => Math.min(pageCount, p + 1)),
+      last: () => setPage(pageCount),
+    }),
+    [pageCount]
+  );
 
   return (
     <div className="space-y-6">
@@ -86,24 +161,93 @@ export default function Home() {
 
       <AnalysisQueue onProgress={load} />
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-zinc-400">
-          {games.length} games · {analyzed} analyzed
-          {emptyCount > 0 && (
-            <span className="text-amber-400"> · {emptyCount} without move data (re-import to repair)</span>
+          {filtersActive ? (
+            <>
+              {total} matching · {analyzedInView} analyzed
+            </>
+          ) : (
+            <>
+              {total} games · {analyzedInView} analyzed
+            </>
           )}
         </p>
-        {analyzable.length > 0 && (
+        {pending > 0 && (
           <button
-            onClick={() => enqueue(analyzable.map((g) => g.id))}
+            onClick={enqueueAll}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
           >
-            Analyze all ({analyzable.length})
+            Analyze all pending ({pending})
           </button>
         )}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-zinc-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Search players, openings, ECO…"
+          className={`${field} min-w-[220px] flex-1`}
+        />
+        <select value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }} className={field}>
+          <option value="">Any site</option>
+          <option value="lichess">Lichess</option>
+          <option value="chesscom">Chess.com</option>
+        </select>
+        <select value={speed} onChange={(e) => { setSpeed(e.target.value); setPage(1); }} className={field}>
+          <option value="">Any speed</option>
+          {SPEEDS.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <select value={result} onChange={(e) => { setResult(e.target.value); setPage(1); }} className={field}>
+          <option value="">Any result</option>
+          <option value="win">Wins</option>
+          <option value="loss">Losses</option>
+          <option value="draw">Draws</option>
+        </select>
+        <select value={color} onChange={(e) => { setColor(e.target.value); setPage(1); }} className={field}>
+          <option value="">Either colour</option>
+          <option value="w">As White</option>
+          <option value="b">As Black</option>
+        </select>
+        <select
+          value={analyzedFilter}
+          onChange={(e) => { setAnalyzedFilter(e.target.value); setPage(1); }}
+          className={field}
+        >
+          <option value="">All games</option>
+          <option value="0">Not analysed</option>
+          <option value="1">Analysed</option>
+        </select>
+        <input
+          type="date"
+          value={from}
+          onChange={(e) => { setFrom(e.target.value); setPage(1); }}
+          className={field}
+          title="From date"
+        />
+        <input
+          type="date"
+          value={to}
+          onChange={(e) => { setTo(e.target.value); setPage(1); }}
+          className={field}
+          title="To date"
+        />
+        {filtersActive && (
+          <button onClick={clearFilters} className="rounded-lg bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700">
+            Clear
+          </button>
+        )}
+      </div>
+
+      <div className={`overflow-x-auto rounded-xl border border-zinc-800 ${loading ? "opacity-60" : ""}`}>
         <table className="w-full text-sm">
           <thead className="bg-zinc-900 text-left text-xs uppercase tracking-wider text-zinc-400">
             <tr>
@@ -120,7 +264,7 @@ export default function Home() {
             {games.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-3 py-8 text-center text-zinc-500">
-                  No games yet — import a profile above.
+                  {filtersActive ? "No games match these filters." : "No games yet — import a profile above."}
                 </td>
               </tr>
             )}
@@ -132,6 +276,7 @@ export default function Home() {
                   </div>
                   <div className="text-xs text-zinc-500">
                     you played {g.player_color === "w" ? "White" : "Black"} · {g.player_rating ?? "?"}
+                    {g.played_at && ` · ${g.played_at.slice(0, 10)}`}
                   </div>
                 </td>
                 <td className="px-3 py-2 font-mono">{g.result}</td>
@@ -155,9 +300,7 @@ export default function Home() {
                           no moves
                         </span>
                       ) : queuedIds.has(g.id) ? (
-                        <span className="rounded bg-indigo-950 px-2.5 py-1 text-xs text-indigo-300">
-                          queued
-                        </span>
+                        <span className="rounded bg-indigo-950 px-2.5 py-1 text-xs text-indigo-300">queued</span>
                       ) : (
                         <button
                           onClick={() => enqueue([g.id])}
@@ -186,6 +329,51 @@ export default function Home() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-400">
+        <span>
+          {total === 0 ? "Nothing to show" : `Showing ${rangeStart}–${rangeEnd} of ${total}`}
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(1);
+            }}
+            className={field}
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n} / page
+              </option>
+            ))}
+          </select>
+          <button onClick={pager.first} disabled={page <= 1} className="rounded bg-zinc-800 px-2.5 py-1.5 disabled:opacity-40">
+            «
+          </button>
+          <button onClick={pager.prev} disabled={page <= 1} className="rounded bg-zinc-800 px-3 py-1.5 disabled:opacity-40">
+            Prev
+          </button>
+          <span className="px-1 text-zinc-300">
+            Page {page} / {pageCount}
+          </span>
+          <button
+            onClick={pager.next}
+            disabled={page >= pageCount}
+            className="rounded bg-zinc-800 px-3 py-1.5 disabled:opacity-40"
+          >
+            Next
+          </button>
+          <button
+            onClick={pager.last}
+            disabled={page >= pageCount}
+            className="rounded bg-zinc-800 px-2.5 py-1.5 disabled:opacity-40"
+          >
+            »
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS positions (
 
 CREATE INDEX IF NOT EXISTS idx_positions_game ON positions(game_id, ply);
 CREATE INDEX IF NOT EXISTS idx_games_analyzed ON games(analyzed);
+CREATE INDEX IF NOT EXISTS idx_games_played ON games(played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_games_source ON games(source);
 
 CREATE TABLE IF NOT EXISTS puzzles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -299,13 +301,6 @@ export function upsertGame(g: NewGame): number {
   return Number(row?.id ?? 0);
 }
 
-export function listGames(): GameRow[] {
-  return getDb()
-    .prepare("SELECT * FROM games ORDER BY played_at DESC, id DESC")
-    .all()
-    .map((r) => toGameRow(r as Record<string, unknown>));
-}
-
 export function getGame(id: number): GameRow | null {
   const r = getDb().prepare("SELECT * FROM games WHERE id = ?").get(id);
   return r ? toGameRow(r as Record<string, unknown>) : null;
@@ -325,9 +320,110 @@ export function deleteGame(id: number): void {
   db.prepare("DELETE FROM games WHERE id = ?").run(id);
 }
 
-export function countGames(): number {
-  const r = getDb().prepare("SELECT COUNT(*) AS n FROM games").get() as { n: number };
-  return Number(r.n);
+export interface GameQuery {
+  /** Free-text search over players, opening name and ECO. */
+  q?: string;
+  source?: string;
+  speed?: string;
+  analyzed?: 0 | 1;
+  color?: "w" | "b";
+  /** Outcome from the player's perspective. */
+  result?: "win" | "loss" | "draw";
+  /** Inclusive ISO date bounds on played_at. */
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface GameQueryResult {
+  games: GameRow[];
+  total: number;
+  analyzed: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+/** Paginated, searchable, filterable view of the games table. */
+export function queryGames(query: GameQuery): GameQueryResult {
+  const db = getDb();
+  const where: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (query.q && query.q.trim()) {
+    const like = `%${query.q.trim().toLowerCase()}%`;
+    where.push(
+      `(lower(white) LIKE ? OR lower(black) LIKE ? OR lower(opponent) LIKE ?
+        OR lower(opening_name) LIKE ? OR lower(eco) LIKE ?)`
+    );
+    params.push(like, like, like, like, like);
+  }
+  if (query.source) {
+    where.push("source = ?");
+    params.push(query.source);
+  }
+  if (query.speed) {
+    where.push("speed = ?");
+    params.push(query.speed);
+  }
+  if (query.analyzed != null) {
+    where.push("analyzed = ?");
+    params.push(query.analyzed);
+  }
+  if (query.color) {
+    where.push("player_color = ?");
+    params.push(query.color);
+  }
+  if (query.result === "win") {
+    where.push("((player_color='w' AND result='1-0') OR (player_color='b' AND result='0-1'))");
+  } else if (query.result === "loss") {
+    where.push("((player_color='w' AND result='0-1') OR (player_color='b' AND result='1-0'))");
+  } else if (query.result === "draw") {
+    where.push("result = '1/2-1/2'");
+  }
+  if (query.from) {
+    where.push("played_at >= ?");
+    params.push(query.from);
+  }
+  if (query.to) {
+    where.push("played_at <= ?");
+    params.push(query.to);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const counts = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN analyzed=1 THEN 1 ELSE 0 END) AS analyzed
+       FROM games ${whereSql}`
+    )
+    .get(...params) as Record<string, unknown>;
+  const total = Number(counts?.total ?? 0);
+  const analyzed = Number(counts?.analyzed ?? 0);
+
+  const pageSize = Math.min(Math.max(Math.floor(query.pageSize ?? 50), 1), 200);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(Math.floor(query.page ?? 1), 1), pageCount);
+  const offset = (page - 1) * pageSize;
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM games ${whereSql}
+       ORDER BY played_at DESC, id DESC
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, pageSize, offset) as Record<string, unknown>[];
+
+  return {
+    games: rows.map(toGameRow),
+    total,
+    analyzed,
+    page,
+    pageSize,
+    pageCount,
+  };
 }
 
 /** Of these games, the ones that still need analysis (have moves, not analysed). */

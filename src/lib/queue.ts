@@ -62,6 +62,8 @@ export interface JobStats {
   byType: Record<string, Counts>;
   games: { total: number; analyzed: number; pending: number; empty: number };
   active: { id: number; type: JobType; label: string | null; progress: number; stage: string | null }[];
+  /** Games with an analysis job queued or running, so the list can flag them. */
+  queuedGameIds: number[];
 }
 
 export interface JobWithGame extends Job {
@@ -409,6 +411,17 @@ export function getJobStats(): JobStats {
     )
     .all() as Record<string, unknown>[];
 
+  const queuedGameIds = (
+    db
+      .prepare(
+        `SELECT DISTINCT json_extract(payload, '$.gameId') AS gameId
+         FROM jobs WHERE type='analyze' AND status IN ('queued','running')`
+      )
+      .all() as Record<string, unknown>[]
+  )
+    .map((r) => Number(r.gameId))
+    .filter((n) => Number.isInteger(n));
+
   return {
     jobs: totals,
     byType,
@@ -425,6 +438,7 @@ export function getJobStats(): JobStats {
       progress: Number(r.progress ?? 0),
       stage: r.stage == null ? null : String(r.stage),
     })),
+    queuedGameIds,
   };
 }
 

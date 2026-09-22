@@ -17,7 +17,7 @@ analysis).
 
 ## Concepts
 
-* [Concepts](concepts/) — coaching rules, move classification, weakness definitions, tactical motifs, accuracy, spaced repetition, game import, persistence, and the job queue.
+* [Concepts](concepts/) — coaching rules, move classification, weakness definitions, tactical motifs, accuracy, spaced repetition, game import, the games browser, persistence, and the job queue.
 
 ## Entities
 

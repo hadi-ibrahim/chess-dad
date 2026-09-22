@@ -9,3 +9,4 @@
 * [Job queue](job-queue.md) — the durable typed job queue and worker pool behind imports and analysis.
 * [Game import](game-import.md) — fetching and parsing Lichess/Chess.com games, rate limits, and move formats.
 * [Persistence](persistence.md) — the local-first SQLite data model.
+* [Games browser](games-browser.md) — how the library is searched, filtered, and paginated.
