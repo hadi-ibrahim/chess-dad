@@ -3,28 +3,45 @@ import { getDb } from "./db";
 import { config } from "./config";
 
 /**
- * A durable analysis queue backed by SQLite.
+ * A durable, typed job queue backed by SQLite.
  *
  * This is the message queue the API publishes to and the worker pool consumes
- * from. It is transactional, at-least-once, and survives restarts; jobs are
+ * from. Jobs are transactional, at-least-once, and survive restarts; each is
  * claimed under a lease so a crashed worker's job is retried. The interface is
  * deliberately small so the storage could be swapped for Redis/BullMQ later.
  */
 
+export type JobType = "analyze" | "import";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "canceled";
 
-export interface AnalysisJob {
-  id: number;
-  game_id: number;
-  status: JobStatus;
+export interface AnalyzePayload {
+  gameId: number;
   depth: number | null;
-  explain: number;
-  generate_puzzles: number;
+  explain: boolean;
+  generatePuzzles: boolean;
+}
+
+export interface ImportPayload {
+  source: "lichess" | "chesscom";
+  username: string;
+  max: number;
+  /** Queue analysis for the newly imported games once this job finishes. */
+  analyzeAfter: boolean;
+}
+
+export interface Job {
+  id: number;
+  type: JobType;
+  payload: Record<string, unknown>;
+  label: string | null;
+  priority: number;
+  status: JobStatus;
   progress: number;
   stage: string | null;
   attempts: number;
   max_attempts: number;
   error: string | null;
+  result: Record<string, unknown> | null;
   worker_id: string | null;
   leased_until: string | null;
   created_at: string;
@@ -32,7 +49,22 @@ export interface AnalysisJob {
   finished_at: string | null;
 }
 
-export interface JobWithGame extends AnalysisJob {
+export interface Counts {
+  queued: number;
+  running: number;
+  done: number;
+  failed: number;
+  canceled: number;
+}
+
+export interface JobStats {
+  jobs: Counts;
+  byType: Record<string, Counts>;
+  games: { total: number; analyzed: number; pending: number; empty: number };
+  active: { id: number; type: JobType; label: string | null; progress: number; stage: string | null }[];
+}
+
+export interface JobWithGame extends Job {
   white: string;
   black: string;
   source: string;
@@ -40,25 +72,34 @@ export interface JobWithGame extends AnalysisJob {
   opening_name: string;
 }
 
-export interface JobStats {
-  jobs: { queued: number; running: number; done: number; failed: number; canceled: number };
-  games: { total: number; analyzed: number; pending: number; empty: number };
-  active: { id: number; gameId: number; progress: number; stage: string | null }[];
+function zero(): Counts {
+  return { queued: 0, running: 0, done: 0, failed: 0, canceled: 0 };
 }
 
-function toJob(r: Record<string, unknown>): AnalysisJob {
+function parseJson(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function toJob(r: Record<string, unknown>): Job {
   return {
     id: Number(r.id),
-    game_id: Number(r.game_id),
+    type: r.type as JobType,
+    payload: parseJson(r.payload) ?? {},
+    label: r.label == null ? null : String(r.label),
+    priority: Number(r.priority ?? 0),
     status: r.status as JobStatus,
-    depth: r.depth == null ? null : Number(r.depth),
-    explain: Number(r.explain ?? 1),
-    generate_puzzles: Number(r.generate_puzzles ?? 1),
     progress: Number(r.progress ?? 0),
     stage: r.stage == null ? null : String(r.stage),
     attempts: Number(r.attempts ?? 0),
     max_attempts: Number(r.max_attempts ?? 1),
     error: r.error == null ? null : String(r.error),
+    result: parseJson(r.result),
     worker_id: r.worker_id == null ? null : String(r.worker_id),
     leased_until: r.leased_until == null ? null : String(r.leased_until),
     created_at: String(r.created_at ?? ""),
@@ -67,73 +108,136 @@ function toJob(r: Record<string, unknown>): AnalysisJob {
   };
 }
 
-export interface EnqueueOptions {
-  depth?: number | null;
-  explain?: boolean;
-  generatePuzzles?: boolean;
+interface NewJob {
+  type: JobType;
+  payload: unknown;
+  label: string;
+  priority: number;
   maxAttempts?: number;
 }
 
-/** Enqueue one analysis job per game, skipping games that already have an active job. */
-export function enqueueJobs(
-  gameIds: number[],
-  opts: EnqueueOptions = {}
-): { enqueued: number; skipped: number } {
+function insertJobs(rows: NewJob[]): number[] {
+  if (rows.length === 0) return [];
   const db = getDb();
   const insert = db.prepare(
-    `INSERT INTO analysis_jobs (game_id, depth, explain, generate_puzzles, max_attempts)
-     VALUES (?, ?, ?, ?, ?)`
+    "INSERT INTO jobs (type, payload, label, priority, max_attempts) VALUES (?, ?, ?, ?, ?)"
   );
-  const active = db.prepare(
-    "SELECT 1 FROM analysis_jobs WHERE game_id = ? AND status IN ('queued','running') LIMIT 1"
-  );
-
-  let enqueued = 0;
-  let skipped = 0;
+  const ids: number[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const gameId of gameIds) {
-      if (active.get(gameId)) {
-        skipped += 1;
-        continue;
-      }
-      insert.run(
-        gameId,
-        opts.depth ?? null,
-        opts.explain === false ? 0 : 1,
-        opts.generatePuzzles === false ? 0 : 1,
-        opts.maxAttempts ?? config.jobMaxAttempts
+    for (const r of rows) {
+      const info = insert.run(
+        r.type,
+        JSON.stringify(r.payload),
+        r.label,
+        r.priority,
+        r.maxAttempts ?? config.jobMaxAttempts
       );
-      enqueued += 1;
+      ids.push(Number(info.lastInsertRowid));
     }
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
-  return { enqueued, skipped };
+  return ids;
 }
 
-/** Atomically claim the oldest queued job, marking it running under a lease. */
-export function claimNextJob(workerId: string, leaseMs: number): AnalysisJob | null {
+// ---------------------------------------------------------------------------
+// Publishing
+// ---------------------------------------------------------------------------
+
+export interface AnalyzeEnqueueOptions {
+  depth?: number | null;
+  explain?: boolean;
+  generatePuzzles?: boolean;
+}
+
+/** Publish one analysis job per game, skipping games that already have an active job. */
+export function enqueueAnalyzeJobs(
+  gameIds: number[],
+  opts: AnalyzeEnqueueOptions = {}
+): { enqueued: number; skipped: number } {
+  const db = getDb();
+  const active = db.prepare(
+    `SELECT 1 FROM jobs
+     WHERE type='analyze' AND status IN ('queued','running')
+       AND json_extract(payload, '$.gameId') = ? LIMIT 1`
+  );
+  const rows: NewJob[] = [];
+  let skipped = 0;
+  for (const gameId of gameIds) {
+    if (active.get(gameId)) {
+      skipped += 1;
+      continue;
+    }
+    const payload: AnalyzePayload = {
+      gameId,
+      depth: opts.depth ?? null,
+      explain: opts.explain !== false,
+      generatePuzzles: opts.generatePuzzles !== false,
+    };
+    rows.push({ type: "analyze", payload, label: `game ${gameId}`, priority: 0 });
+  }
+  return { enqueued: insertJobs(rows).length, skipped };
+}
+
+/** Publish one import job for a profile. Skips a duplicate that is already pending. */
+export function enqueueImportJob(
+  source: "lichess" | "chesscom",
+  username: string,
+  max: number,
+  opts: { analyzeAfter?: boolean } = {}
+): { jobId: number | null; skipped: boolean } {
+  const db = getDb();
+  const existing = db
+    .prepare(
+      `SELECT id FROM jobs
+       WHERE type='import' AND status IN ('queued','running')
+         AND json_extract(payload, '$.source') = ?
+         AND lower(json_extract(payload, '$.username')) = lower(?)
+       LIMIT 1`
+    )
+    .get(source, username) as { id: number } | undefined;
+  if (existing) return { jobId: Number(existing.id), skipped: true };
+
+  const payload: ImportPayload = {
+    source,
+    username,
+    max,
+    analyzeAfter: opts.analyzeAfter !== false,
+  };
+  // Imports are user-initiated, so they are claimed ahead of bulk analysis.
+  const [id] = insertJobs([
+    { type: "import", payload, label: `${source}: ${username}`, priority: 10 },
+  ]);
+  return { jobId: id ?? null, skipped: false };
+}
+
+// ---------------------------------------------------------------------------
+// Consuming
+// ---------------------------------------------------------------------------
+
+/** Atomically claim the highest-priority queued job, under a lease. */
+export function claimNextJob(workerId: string, leaseMs: number): Job | null {
   const db = getDb();
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db
-      .prepare("SELECT id FROM analysis_jobs WHERE status = 'queued' ORDER BY id ASC LIMIT 1")
+      .prepare("SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC, id ASC LIMIT 1")
       .get() as { id: number } | undefined;
     if (!row) {
       db.exec("COMMIT");
       return null;
     }
     db.prepare(
-      `UPDATE analysis_jobs
+      `UPDATE jobs
        SET status='running', worker_id=?, attempts=attempts+1,
            started_at=COALESCE(started_at, datetime('now')),
            leased_until=datetime('now', ?), progress=0, stage='queued', error=NULL
        WHERE id=?`
     ).run(workerId, `+${Math.ceil(leaseMs / 1000)} seconds`, row.id);
-    const job = db.prepare("SELECT * FROM analysis_jobs WHERE id=?").get(row.id) as Record<string, unknown>;
+    const job = db.prepare("SELECT * FROM jobs WHERE id=?").get(row.id) as Record<string, unknown>;
     db.exec("COMMIT");
     return toJob(job);
   } catch (e) {
@@ -142,34 +246,38 @@ export function claimNextJob(workerId: string, leaseMs: number): AnalysisJob | n
   }
 }
 
-/** Renew the lease on a running job so it is not reclaimed as stale. */
 export function heartbeatJob(id: number, leaseMs: number): void {
   getDb()
-    .prepare("UPDATE analysis_jobs SET leased_until=datetime('now', ?) WHERE id=? AND status='running'")
+    .prepare("UPDATE jobs SET leased_until=datetime('now', ?) WHERE id=? AND status='running'")
     .run(`+${Math.ceil(leaseMs / 1000)} seconds`, id);
 }
 
 export function setJobProgress(id: number, progress: number, stage: string): void {
   getDb()
-    .prepare("UPDATE analysis_jobs SET progress=?, stage=?, leased_until=datetime('now', ?) WHERE id=?")
-    .run(Math.max(0, Math.min(1, progress)), stage, `+${Math.ceil(config.jobLeaseMs / 1000)} seconds`, id);
+    .prepare("UPDATE jobs SET progress=?, stage=?, leased_until=datetime('now', ?) WHERE id=?")
+    .run(
+      Math.max(0, Math.min(1, progress)),
+      stage,
+      `+${Math.ceil(config.jobLeaseMs / 1000)} seconds`,
+      id
+    );
 }
 
-export function completeJob(id: number): void {
+export function completeJob(id: number, result?: Record<string, unknown>): void {
   getDb()
     .prepare(
-      `UPDATE analysis_jobs
+      `UPDATE jobs
        SET status='done', progress=1, stage='done', finished_at=datetime('now'),
-           error=NULL, worker_id=NULL, leased_until=NULL
+           error=NULL, worker_id=NULL, leased_until=NULL, result=?
        WHERE id=?`
     )
-    .run(id);
+    .run(result ? JSON.stringify(result) : null, id);
 }
 
 /** Record a failure; retry while attempts remain, otherwise mark failed. */
 export function failJob(id: number, error: string): void {
   const db = getDb();
-  const j = db.prepare("SELECT attempts, max_attempts FROM analysis_jobs WHERE id=?").get(id) as
+  const j = db.prepare("SELECT attempts, max_attempts FROM jobs WHERE id=?").get(id) as
     | { attempts: number; max_attempts: number }
     | undefined;
   if (!j) return;
@@ -177,30 +285,29 @@ export function failJob(id: number, error: string): void {
   const message = error.slice(0, 800);
   if (canRetry) {
     db.prepare(
-      `UPDATE analysis_jobs
-       SET status='queued', error=?, stage='retrying', progress=0,
-           worker_id=NULL, leased_until=NULL
-       WHERE id=?`
+      `UPDATE jobs SET status='queued', error=?, stage='retrying', progress=0,
+         worker_id=NULL, leased_until=NULL WHERE id=?`
     ).run(message, id);
   } else {
     db.prepare(
-      `UPDATE analysis_jobs
-       SET status='failed', error=?, stage='failed', finished_at=datetime('now'),
-           worker_id=NULL, leased_until=NULL
-       WHERE id=?`
+      `UPDATE jobs SET status='failed', error=?, stage='failed', finished_at=datetime('now'),
+         worker_id=NULL, leased_until=NULL WHERE id=?`
     ).run(message, id);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Recovery and control
+// ---------------------------------------------------------------------------
+
 /**
  * Reset jobs left 'running' by a previous process. The worker runs in-process,
- * so at startup any 'running' row is orphaned and safe to requeue immediately
- * (rather than waiting out its lease).
+ * so at startup any 'running' row is orphaned and safe to requeue immediately.
  */
 export function requeueOrphanedJobs(): number {
   const info = getDb()
     .prepare(
-      `UPDATE analysis_jobs
+      `UPDATE jobs
        SET status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
            stage = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
            error = CASE WHEN attempts < max_attempts THEN NULL ELSE 'interrupted by restart' END,
@@ -214,18 +321,18 @@ export function requeueOrphanedJobs(): number {
   return Number(info.changes);
 }
 
-/** Requeue jobs whose worker died (lease expired). Returns how many were reclaimed. */
+/** Requeue jobs whose worker died (lease expired). */
 export function requeueStaleJobs(): number {
   const db = getDb();
   const expired = db
     .prepare(
-      `SELECT id FROM analysis_jobs
+      `SELECT id FROM jobs
        WHERE status='running' AND (leased_until IS NULL OR leased_until < datetime('now'))`
     )
     .all() as { id: number }[];
   for (const r of expired) {
     db.prepare(
-      `UPDATE analysis_jobs
+      `UPDATE jobs
        SET status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
            error = COALESCE(error, 'worker lease expired'),
            stage = CASE WHEN attempts < max_attempts THEN 'retrying' ELSE 'failed' END,
@@ -237,23 +344,20 @@ export function requeueStaleJobs(): number {
   return expired.length;
 }
 
-/** Cancel everything still queued (running jobs finish on their own). */
 export function cancelQueuedJobs(): number {
   const info = getDb()
     .prepare(
-      `UPDATE analysis_jobs
-       SET status='canceled', stage='canceled', finished_at=datetime('now')
+      `UPDATE jobs SET status='canceled', stage='canceled', finished_at=datetime('now')
        WHERE status='queued'`
     )
     .run();
   return Number(info.changes);
 }
 
-/** Put failed jobs back on the queue. */
 export function retryFailedJobs(): number {
   const info = getDb()
     .prepare(
-      `UPDATE analysis_jobs
+      `UPDATE jobs
        SET status='queued', error=NULL, stage='queued', progress=0, attempts=0,
            finished_at=NULL, worker_id=NULL, leased_until=NULL
        WHERE status='failed'`
@@ -262,22 +366,31 @@ export function retryFailedJobs(): number {
   return Number(info.changes);
 }
 
-/** Delete finished jobs so the queue view stays tidy. */
 export function clearFinishedJobs(): number {
-  const info = getDb()
-    .prepare("DELETE FROM analysis_jobs WHERE status IN ('done','canceled')")
-    .run();
+  const info = getDb().prepare("DELETE FROM jobs WHERE status IN ('done','canceled')").run();
   return Number(info.changes);
 }
 
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
 export function getJobStats(): JobStats {
   const db = getDb();
-  const rows = db.prepare("SELECT status, COUNT(*) AS c FROM analysis_jobs GROUP BY status").all() as {
-    status: string;
-    c: number;
-  }[];
-  const by: Record<string, number> = {};
-  for (const r of rows) by[r.status] = Number(r.c);
+  const totals = zero();
+  const byType: Record<string, Counts> = {};
+  const rows = db
+    .prepare("SELECT type, status, COUNT(*) AS c FROM jobs GROUP BY type, status")
+    .all() as { type: string; status: string; c: number }[];
+  for (const r of rows) {
+    const counts = byType[r.type] ?? zero();
+    byType[r.type] = counts;
+    const status = r.status as keyof Counts;
+    if (status in counts) {
+      counts[status] += Number(r.c);
+      totals[status] += Number(r.c);
+    }
+  }
 
   const g = db
     .prepare(
@@ -292,18 +405,13 @@ export function getJobStats(): JobStats {
 
   const active = db
     .prepare(
-      "SELECT id, game_id, progress, stage FROM analysis_jobs WHERE status='running' ORDER BY id LIMIT 12"
+      "SELECT id, type, label, progress, stage FROM jobs WHERE status='running' ORDER BY id LIMIT 12"
     )
     .all() as Record<string, unknown>[];
 
   return {
-    jobs: {
-      queued: by.queued ?? 0,
-      running: by.running ?? 0,
-      done: by.done ?? 0,
-      failed: by.failed ?? 0,
-      canceled: by.canceled ?? 0,
-    },
+    jobs: totals,
+    byType,
     games: {
       total: Number(g.total ?? 0),
       analyzed: Number(g.analyzed ?? 0),
@@ -312,28 +420,37 @@ export function getJobStats(): JobStats {
     },
     active: active.map((r) => ({
       id: Number(r.id),
-      gameId: Number(r.game_id),
+      type: r.type as JobType,
+      label: r.label == null ? null : String(r.label),
       progress: Number(r.progress ?? 0),
       stage: r.stage == null ? null : String(r.stage),
     })),
   };
 }
 
-export function listJobs(filter: { status?: JobStatus; gameId?: number; limit?: number } = {}): JobWithGame[] {
+export function listJobs(
+  filter: { status?: JobStatus; type?: JobType; gameId?: number; limit?: number } = {}
+): JobWithGame[] {
   const where: string[] = [];
   const params: (string | number)[] = [];
   if (filter.status) {
     where.push("j.status = ?");
     params.push(filter.status);
   }
+  if (filter.type) {
+    where.push("j.type = ?");
+    params.push(filter.type);
+  }
   if (filter.gameId != null) {
-    where.push("j.game_id = ?");
+    where.push("json_extract(j.payload, '$.gameId') = ?");
     params.push(filter.gameId);
   }
   const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
   const sql =
-    `SELECT j.*, g.white, g.black, g.source, g.eco, g.opening_name
-     FROM analysis_jobs j JOIN games g ON g.id = j.game_id
+    `SELECT j.*, COALESCE(g.white,'') AS white, COALESCE(g.black,'') AS black,
+            COALESCE(g.source, '') AS source, COALESCE(g.eco,'') AS eco,
+            COALESCE(g.opening_name,'') AS opening_name
+     FROM jobs j LEFT JOIN games g ON g.id = json_extract(j.payload, '$.gameId')
      ${where.length ? "WHERE " + where.join(" AND ") : ""}
      ORDER BY j.id DESC LIMIT ${limit}`;
   return (getDb().prepare(sql).all(...params) as Record<string, unknown>[]).map((r) => ({
@@ -346,11 +463,7 @@ export function listJobs(filter: { status?: JobStatus; gameId?: number; limit?: 
   }));
 }
 
-export function getActiveJobForGame(gameId: number): AnalysisJob | null {
-  const r = getDb()
-    .prepare(
-      "SELECT * FROM analysis_jobs WHERE game_id=? AND status IN ('queued','running') ORDER BY id DESC LIMIT 1"
-    )
-    .get(gameId);
+export function getJob(id: number): Job | null {
+  const r = getDb().prepare("SELECT * FROM jobs WHERE id=?").get(id);
   return r ? toJob(r as Record<string, unknown>) : null;
 }

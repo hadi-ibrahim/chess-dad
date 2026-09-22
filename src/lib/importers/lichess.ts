@@ -3,7 +3,7 @@ import { Chess, type Move } from "chess.js";
 import { config } from "../config";
 import { parseRetryAfterMs, sleep, USER_AGENT } from "../http";
 import type { NewGame } from "../db";
-import type { Color, PlyInfo } from "../types";
+import type { Color, JobProgress, PlyInfo } from "../types";
 
 export interface ImportedGame extends NewGame {
   plies: PlyInfo[];
@@ -233,11 +233,17 @@ export async function fetchLichessGames(
 export async function importLichess(
   username: string,
   max: number,
-  token?: string
-): Promise<{ username: string; count: number }> {
+  token?: string,
+  onProgress?: (info: JobProgress) => void
+): Promise<{ username: string; count: number; gameIds: number[] }> {
+  onProgress?.({ stage: "fetching", progress: 0.05 });
   const games = await fetchLichessGames(username, max, token);
+  onProgress?.({ stage: "parsed", progress: 0.35 });
+
   const { upsertGame, insertPositionIfMissing } = await import("../db");
-  for (const g of games) {
+  const gameIds: number[] = [];
+  for (let i = 0; i < games.length; i++) {
+    const g = games[i];
     const gameId = upsertGame({
       source: g.source,
       external_id: g.external_id,
@@ -270,6 +276,11 @@ export async function importLichess(
         clock_seconds: p.clockSeconds,
       });
     }
+    gameIds.push(gameId);
+    onProgress?.({
+      stage: "storing",
+      progress: 0.35 + 0.65 * ((i + 1) / Math.max(1, games.length)),
+    });
   }
-  return { username, count: games.length };
+  return { username, count: games.length, gameIds };
 }

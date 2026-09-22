@@ -1,6 +1,6 @@
 import "server-only";
 import type { NewGame } from "../db";
-import type { Color, PlyInfo } from "../types";
+import type { Color, JobProgress, PlyInfo } from "../types";
 import { parsePgn } from "../chess-core";
 import { upsertGame, insertPositionIfMissing } from "../db";
 import { fetchWithBackoff, USER_AGENT } from "../http";
@@ -79,7 +79,11 @@ function parseChessComGame(g: ChessComGame, username: string): ImportedGame | nu
 }
 
 // Chess.com's public API requires a User-Agent header and returns 403 without one.
-export async function fetchChessComGames(username: string, max: number): Promise<ImportedGame[]> {
+export async function fetchChessComGames(
+  username: string,
+  max: number,
+  onProgress?: (info: JobProgress) => void
+): Promise<ImportedGame[]> {
   const base = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/archives`;
   const res = await fetchWithBackoff(base, { headers: { "User-Agent": USER_AGENT } }, { retries: 2 });
   if (res.status === 404) throw new Error(`Chess.com user not found: ${username}`);
@@ -107,13 +111,26 @@ export async function fetchChessComGames(username: string, max: number): Promise
         // skip
       }
     }
+    onProgress?.({
+      stage: "archives",
+      progress: 0.05 + 0.3 * (collected.length / Math.max(1, max)),
+    });
   }
   return collected;
 }
 
-export async function importChessCom(username: string, max: number): Promise<{ username: string; count: number }> {
-  const games = await fetchChessComGames(username, max);
-  for (const g of games) {
+export async function importChessCom(
+  username: string,
+  max: number,
+  onProgress?: (info: JobProgress) => void
+): Promise<{ username: string; count: number; gameIds: number[] }> {
+  onProgress?.({ stage: "fetching", progress: 0.05 });
+  const games = await fetchChessComGames(username, max, onProgress);
+  onProgress?.({ stage: "parsed", progress: 0.35 });
+
+  const gameIds: number[] = [];
+  for (let i = 0; i < games.length; i++) {
+    const g = games[i];
     const gameId = upsertGame({
       source: g.source,
       external_id: g.external_id,
@@ -146,6 +163,11 @@ export async function importChessCom(username: string, max: number): Promise<{ u
         clock_seconds: p.clockSeconds,
       });
     }
+    gameIds.push(gameId);
+    onProgress?.({
+      stage: "storing",
+      progress: 0.35 + 0.65 * ((i + 1) / Math.max(1, games.length)),
+    });
   }
-  return { username, count: games.length };
+  return { username, count: games.length, gameIds };
 }

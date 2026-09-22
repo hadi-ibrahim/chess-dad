@@ -19,9 +19,11 @@ sources:
 
 # Overview
 
-A profile is imported by fetching each game from the site's public API and
-replaying it with chess.js into per-ply positions, so every game can later be
-analysed and reviewed.[^lichess-export][^chesscom-api]
+An import runs as a queued `import` [job](job-queue.md) rather than inside the
+HTTP request: games are fetched from the site's public API and replayed with
+chess.js into per-ply positions, so every game can later be analysed and
+reviewed.[^lichess-export][^chesscom-api] With `analyzeAfter`, the import also
+enqueues analysis for the games it brought in.
 
 # Lichess
 

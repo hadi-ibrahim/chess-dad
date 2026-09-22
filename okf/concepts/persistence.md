@@ -20,7 +20,7 @@ and personal game history stays private.
 |-------|---------|
 | `games` | Imported game metadata and PGN — one row per game |
 | `positions` | One row per ply: FEN, played move, engine best move, evaluation, centipawn loss, classification, motif, phase, clock |
-| `analysis_jobs` | The durable analysis queue (see [Analysis queue](analysis-queue.md)) |
+| `jobs` | The durable job queue — imports and analysis (see [Job queue](job-queue.md)) |
 | `puzzles` | Personal puzzles built from your own mistakes, with SM-2 scheduling state |
 | `engine_cache` | FEN → engine evaluation, so repeated positions are never re-searched |
 | `llm_cache` | FEN → coaching explanation, so repeated positions are never re-explained |

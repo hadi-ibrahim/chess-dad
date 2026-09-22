@@ -97,6 +97,12 @@ export interface LLMExplanation {
   drill_suggestion: string;
 }
 
+/** Coarse progress report emitted by long-running jobs. */
+export interface JobProgress {
+  stage: string;
+  progress: number;
+}
+
 export interface PuzzleRow {
   id: number;
   game_id: number;

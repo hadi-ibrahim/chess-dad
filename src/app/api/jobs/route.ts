@@ -2,18 +2,19 @@ import { NextResponse } from "next/server";
 import {
   cancelQueuedJobs,
   clearFinishedJobs,
-  enqueueJobs,
+  enqueueAnalyzeJobs,
   getJobStats,
   listJobs,
   retryFailedJobs,
   type JobStatus,
+  type JobType,
 } from "@/lib/queue";
 import { getDb } from "@/lib/db";
 import { ensureWorkerStarted } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
-/** Publish analysis jobs for specific games, or every game still pending. */
+/** Publish analysis jobs for specific games, or for every game still pending. */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     gameIds?: number[];
@@ -39,13 +40,12 @@ export async function POST(request: Request) {
 
   const depth =
     typeof body.depth === "number" ? Math.min(Math.max(Math.floor(body.depth), 6), 30) : null;
-  const result = enqueueJobs(gameIds, {
+  const result = enqueueAnalyzeJobs(gameIds, {
     depth,
     explain: body.explain,
     generatePuzzles: body.generatePuzzles,
   });
 
-  // Start the consumer (idempotent) so jobs begin immediately.
   ensureWorkerStarted();
 
   return NextResponse.json({ ...result, requested: gameIds.length, ...getJobStats() });
@@ -54,6 +54,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const status = url.searchParams.get("status");
+  const type = url.searchParams.get("type");
   const gameId = url.searchParams.get("gameId");
   const limit = Number(url.searchParams.get("limit") ?? 100);
 
@@ -62,6 +63,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     jobList: listJobs({
       status: (status as JobStatus | null) ?? undefined,
+      type: (type as JobType | null) ?? undefined,
       gameId: gameId ? Number(gameId) : undefined,
       limit,
     }),

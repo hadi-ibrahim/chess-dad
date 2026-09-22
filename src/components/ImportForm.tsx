@@ -8,6 +8,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
   const [lichessToken, setLichessToken] = useState("");
   const [tokenSaved, setTokenSaved] = useState(false);
   const [max, setMax] = useState(100);
+  const [analyzeAfter, setAnalyzeAfter] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,17 +32,24 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       const res = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lichess, chesscom, max, lichessToken }),
+        body: JSON.stringify({ lichess, chesscom, max, lichessToken, analyzeAfter }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Import failed");
+        setError(data.error || "Could not queue the import");
       } else {
-        const parts: string[] = [];
-        if (data.lichess) parts.push(`Lichess: ${data.lichess.count} games`);
-        if (data.chesscom) parts.push(`Chess.com: ${data.chesscom.count} games`);
-        const errs = (data.errors || []).map((e: { source: string; message: string }) => `${e.source}: ${e.message}`);
-        setMessage([parts.join(" · "), ...errs].filter(Boolean).join(" — ") || "Done");
+        const jobs = (data.importJobs || []) as { source: string; username: string; skipped: boolean }[];
+        const queued = jobs.filter((j) => !j.skipped);
+        const skipped = jobs.length - queued.length;
+        if (queued.length > 0) {
+          const names = queued.map((j) => `${j.source}: ${j.username}`).join(" · ");
+          setMessage(
+            `Queued ${names}${analyzeAfter ? " — analysis will follow automatically" : ""}` +
+              `${skipped > 0 ? ` (${skipped} already queued)` : ""}. Watch the queue panel.`
+          );
+        } else {
+          setMessage("Those imports are already queued.");
+        }
         if (lichessToken.trim()) setTokenSaved(true);
         onImported();
       }
@@ -129,13 +137,22 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
             className={field}
           />
         </label>
-        <div className="flex items-end">
+        <label className="flex items-center gap-2 text-sm text-zinc-300 sm:col-span-2">
+          <input
+            type="checkbox"
+            checked={analyzeAfter}
+            onChange={(e) => setAnalyzeAfter(e.target.checked)}
+            className="h-4 w-4 accent-indigo-500"
+          />
+          Analyze the imported games automatically
+        </label>
+        <div className="flex items-end sm:col-span-2">
           <button
             onClick={submit}
             disabled={busy}
             className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
           >
-            {busy ? "Importing…" : "Import games"}
+            {busy ? "Queueing…" : "Import games"}
           </button>
         </div>
       </div>

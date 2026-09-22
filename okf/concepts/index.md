@@ -6,6 +6,6 @@
 * [Tactical motifs](tactical-motifs.md) — the pattern taxonomy used to tag personal puzzles.
 * [Accuracy](accuracy.md) — how game accuracy is computed.
 * [Spaced repetition](spaced-repetition.md) — how personal puzzles are scheduled for review.
-* [Analysis queue](analysis-queue.md) — the durable job queue and worker pool behind background analysis.
+* [Job queue](job-queue.md) — the durable typed job queue and worker pool behind imports and analysis.
 * [Game import](game-import.md) — fetching and parsing Lichess/Chess.com games, rate limits, and move formats.
 * [Persistence](persistence.md) — the local-first SQLite data model.

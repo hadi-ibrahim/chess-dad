@@ -56,7 +56,7 @@ export default function Home() {
   async function enqueue(gameIds: number[]) {
     if (gameIds.length === 0) return;
     setQueuedIds((prev) => new Set([...prev, ...gameIds]));
-    await fetch("/api/analysis/jobs", {
+    await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gameIds }),

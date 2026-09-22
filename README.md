@@ -78,22 +78,26 @@ All settings are environment variables (see [`.env.example`](.env.example)):
    configured LLM — or the offline OKF-grounded fallback.
 6. **Personalize** — mistakes become puzzles, aggregated into a weakness profile.
 
-## Background analysis (queue + workers)
+## Background jobs (queue + workers)
 
-Analysis is asynchronous, so the app stays usable while your library is processed:
+Both slow operations — fetching a game history and analysing it — run as **jobs**,
+so the app stays usable while they work:
 
-1. The UI **publishes** one job per game to a durable queue
-   (`POST /api/analysis/jobs`) and returns immediately — no blocked request.
+1. The UI **publishes** jobs to a durable SQLite queue and returns immediately —
+   no blocked request. `POST /api/import` publishes `import` jobs;
+   `POST /api/jobs` publishes `analyze` jobs.
 2. A **worker pool** (`WORKER_CONCURRENCY`, default `min(4, cpus−1)`) consumes the
-   queue; each game checks out its own Stockfish process from an engine pool, so
-   games analyse in parallel.
-3. The UI **polls** `/api/analysis/status` and renders live progress. Pages stay
-   responsive (a few milliseconds) throughout — roughly 40 games/minute on a
+   queue and dispatches by job type. Analysed games each check out their own
+   Stockfish process from an engine pool, so games run in parallel; imports are
+   claimed first and can **chain** into analysis for the games they brought in
+   (`analyzeAfter`).
+3. The UI **polls** `/api/jobs/status` and renders live progress per job. Pages
+   stay responsive (a few milliseconds) throughout — roughly 40 games/minute on a
    12-core machine versus ~6 sequentially.
 
 Jobs are transactional and leased, so a restart requeues anything interrupted;
 failures retry automatically and are surfaced with a one-click retry. See
-[`okf/concepts/analysis-queue.md`](okf/concepts/analysis-queue.md).
+[`okf/concepts/job-queue.md`](okf/concepts/job-queue.md).
 
 ## Design principles
 

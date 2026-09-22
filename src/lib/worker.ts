@@ -1,25 +1,31 @@
 import "server-only";
 import { config } from "./config";
 import { analyzeGame } from "./analysis";
+import { importLichess } from "./importers/lichess";
+import { importChessCom } from "./importers/chesscom";
 import { writeProgressBundle } from "./okf-progress";
+import { filterUnanalyzedWithMoves, getSetting } from "./db";
 import {
   claimNextJob,
   completeJob,
+  enqueueAnalyzeJobs,
   failJob,
   heartbeatJob,
   requeueOrphanedJobs,
   requeueStaleJobs,
   setJobProgress,
-  type AnalysisJob,
+  type AnalyzePayload,
+  type ImportPayload,
+  type Job,
 } from "./queue";
 
 /**
  * The queue consumer.
  *
  * A pool of `workerConcurrency` loops claims jobs from the durable queue and
- * runs the analysis. The CPU-heavy work happens in Stockfish child processes,
- * so the Node event loop — and therefore the HTTP server — stays responsive
- * while hundreds of games are processed.
+ * runs them. Jobs are typed: `import` fetches games from a site, `analyze` runs
+ * the engine. The CPU-heavy part happens in Stockfish child processes, so the
+ * Node event loop — and therefore the HTTP server — stays responsive.
  */
 
 const WORKER_ID = `w${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
@@ -41,6 +47,14 @@ function state(): WorkerState {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeProgress(id: number, progress: number, stage: string): void {
+  try {
+    setJobProgress(id, progress, stage);
+  } catch {
+    // progress reporting must never fail a job
+  }
 }
 
 /** Start the consumer pool. Idempotent, so any request may call it. */
@@ -69,7 +83,7 @@ async function loop(slot: number): Promise<void> {
   for (;;) {
     if (s.stop) return;
 
-    let job: AnalysisJob | null = null;
+    let job: Job | null = null;
     try {
       job = claimNextJob(workerId, config.jobLeaseMs);
     } catch {
@@ -91,20 +105,9 @@ async function loop(slot: number): Promise<void> {
     }, Math.max(5_000, Math.floor(config.jobLeaseMs / 3)));
 
     try {
-      await analyzeGame(claimed.game_id, {
-        depth: claimed.depth ?? undefined,
-        explain: claimed.explain === 1,
-        generatePuzzles: claimed.generate_puzzles === 1,
-        onProgress: ({ stage, progress }) => {
-          try {
-            setJobProgress(claimed.id, progress, stage);
-          } catch {
-            // non-fatal
-          }
-        },
-      });
-      completeJob(claimed.id);
-      // Keep the OKF progress document in step with the analysis.
+      const result = await runJob(claimed);
+      completeJob(claimed.id, result);
+      // Keep the OKF progress document in step with the library.
       try {
         writeProgressBundle();
       } catch {
@@ -123,7 +126,63 @@ async function loop(slot: number): Promise<void> {
   }
 }
 
-export function getWorkerState(): { started: boolean; running: number; concurrency: number; poolSize: number } {
+function runJob(job: Job): Promise<Record<string, unknown>> {
+  switch (job.type) {
+    case "analyze":
+      return runAnalyzeJob(job);
+    case "import":
+      return runImportJob(job);
+    default:
+      return Promise.reject(new Error(`Unknown job type: ${job.type}`));
+  }
+}
+
+async function runAnalyzeJob(job: Job): Promise<Record<string, unknown>> {
+  const p = job.payload as unknown as AnalyzePayload;
+  if (!Number.isInteger(p?.gameId)) throw new Error("analyze job is missing a gameId");
+
+  const result = await analyzeGame(p.gameId, {
+    depth: p.depth ?? undefined,
+    explain: p.explain !== false,
+    generatePuzzles: p.generatePuzzles !== false,
+    onProgress: ({ stage, progress }) => safeProgress(job.id, progress, stage),
+  });
+  return { ...result };
+}
+
+async function runImportJob(job: Job): Promise<Record<string, unknown>> {
+  const p = job.payload as unknown as ImportPayload;
+  if (!p?.source || !p.username) throw new Error("import job is missing source/username");
+
+  const onProgress = (info: { stage: string; progress: number }) =>
+    safeProgress(job.id, info.progress, info.stage);
+
+  const result =
+    p.source === "lichess"
+      ? await importLichess(p.username, p.max, getSetting("lichess_token") || undefined, onProgress)
+      : await importChessCom(p.username, p.max, onProgress);
+
+  // Chain straight into analysis so an import is one action, not two.
+  let analysisQueued = 0;
+  if (p.analyzeAfter !== false && result.gameIds.length > 0) {
+    const pending = filterUnanalyzedWithMoves(result.gameIds);
+    analysisQueued = enqueueAnalyzeJobs(pending, {}).enqueued;
+  }
+
+  return {
+    source: p.source,
+    username: result.username,
+    imported: result.count,
+    analysisQueued,
+  };
+}
+
+export function getWorkerState(): {
+  started: boolean;
+  running: number;
+  concurrency: number;
+  poolSize: number;
+} {
   const s = state();
   return {
     started: s.started,

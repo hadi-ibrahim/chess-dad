@@ -110,18 +110,19 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 
-CREATE TABLE IF NOT EXISTS analysis_jobs (
+CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  game_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  label TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'queued',
-  depth INTEGER,
-  explain INTEGER NOT NULL DEFAULT 1,
-  generate_puzzles INTEGER NOT NULL DEFAULT 1,
   progress REAL NOT NULL DEFAULT 0,
   stage TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL DEFAULT 2,
   error TEXT,
+  result TEXT,
   worker_id TEXT,
   leased_until TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -129,8 +130,8 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   finished_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON analysis_jobs(status, id);
-CREATE INDEX IF NOT EXISTS idx_jobs_game ON analysis_jobs(game_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(type);
 `;
 
 // Reuse a single connection across hot reloads / route invocations.
@@ -143,8 +144,37 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  migrateLegacyQueue(db);
   globalForDb.__chessmentorDb = db;
   return db;
+}
+
+/**
+ * One-time fold of the old analysis-only queue into the general `jobs` table.
+ * Queue rows are ephemeral state, so a failure here is harmless.
+ */
+function migrateLegacyQueue(db: DatabaseSync): void {
+  try {
+    const legacy = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='analysis_jobs'")
+      .get();
+    if (!legacy) return;
+    db.exec(
+      `INSERT INTO jobs (type, payload, label, priority, status, progress, stage,
+                         attempts, max_attempts, error, worker_id, leased_until,
+                         created_at, started_at, finished_at)
+       SELECT 'analyze',
+              json_object('gameId', game_id, 'depth', depth,
+                          'explain', explain, 'generatePuzzles', generate_puzzles),
+              'game ' || game_id, 0, status, progress, stage,
+              attempts, max_attempts, error, worker_id, leased_until,
+              created_at, started_at, finished_at
+       FROM analysis_jobs`
+    );
+    db.exec("DROP TABLE analysis_jobs");
+  } catch {
+    // non-fatal: the queue is ephemeral
+  }
 }
 
 function toGameRow(r: Record<string, unknown>): GameRow {
@@ -298,6 +328,18 @@ export function deleteGame(id: number): void {
 export function countGames(): number {
   const r = getDb().prepare("SELECT COUNT(*) AS n FROM games").get() as { n: number };
   return Number(r.n);
+}
+
+/** Of these games, the ones that still need analysis (have moves, not analysed). */
+export function filterUnanalyzedWithMoves(gameIds: number[]): number[] {
+  if (gameIds.length === 0) return [];
+  const placeholders = gameIds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT id FROM games WHERE id IN (${placeholders}) AND analyzed = 0 AND total_plies > 0 ORDER BY id ASC`
+    )
+    .all(...gameIds) as { id: number }[];
+  return rows.map((r) => Number(r.id));
 }
 
 // ---------- Positions ----------
