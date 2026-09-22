@@ -1,6 +1,7 @@
 import "server-only";
 import { Chess, type Move } from "chess.js";
 import { config } from "../config";
+import { parseRetryAfterMs, sleep, USER_AGENT } from "../http";
 import type { NewGame } from "../db";
 import type { Color, PlyInfo } from "../types";
 
@@ -122,36 +123,100 @@ function parseLichessGame(g: LichessGameJson, username: string): ImportedGame | 
   };
 }
 
-export async function fetchLichessGames(username: string, max: number): Promise<ImportedGame[]> {
+/** Does the Lichess account exist? Returns null when it cannot be determined. */
+async function lichessUserExists(username: string): Promise<boolean | null> {
+  try {
+    const res = await fetch(`https://lichess.org/api/user/${encodeURIComponent(username)}`, {
+      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+    });
+    if (res.status === 200) return true;
+    if (res.status === 404) return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function throttleMessage(username: string, retryAfterSec: string | null, attempts: number): string {
+  const wait = retryAfterSec ? ` Retry in about ${retryAfterSec}s.` : " Wait a minute and retry.";
+  return (
+    `Lichess throttled the game export for "${username}" after ${attempts} attempt(s) — anonymous ` +
+    `imports are limited to a few requests per minute.${wait} Setting LICHESS_TOKEN in .env.local ` +
+    `raises the limit (and is needed for private games).`
+  );
+}
+
+export async function fetchLichessGames(
+  username: string,
+  max: number,
+  token?: string
+): Promise<ImportedGame[]> {
   const perfTypes = "bullet,blitz,rapid,classical";
   const url =
     `https://lichess.org/api/games/user/${encodeURIComponent(username)}` +
     `?max=${max}&moves=true&clocks=true&evals=false&opening=true&perfType=${perfTypes}`;
-  const headers: Record<string, string> = { Accept: "application/x-ndjson" };
-  if (config.lichessToken) headers.Authorization = `Bearer ${config.lichessToken}`;
+  const authToken = (token ?? "").trim() || config.lichessToken;
+  const headers: Record<string, string> = { Accept: "application/x-ndjson", "User-Agent": USER_AGENT };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
 
-  const res = await fetch(url, { headers });
-  if (res.status === 404) throw new Error(`Lichess user not found: ${username}`);
-  if (res.status === 429) throw new Error("Lichess rate limit reached — try again later.");
-  if (!res.ok) throw new Error(`Lichess API error ${res.status}`);
+  // Lichess throttles anonymous game exports hard. A 429 carries Retry-After, but
+  // the throttle is also frequently masked as a 404 with no header — so on either
+  // signal we wait about one window (~20s steps, capped) and try again.
+  const attempts = authToken ? 2 : 4;
+  const stepWaitMs = 20_000;
+  let lastRes: Response | null = null;
 
-  const text = await res.text();
-  const games: ImportedGame[] = [];
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = parseLichessGame(JSON.parse(trimmed) as LichessGameJson, username);
-      if (parsed) games.push(parsed);
-    } catch {
-      // skip malformed lines
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const res = await fetch(url, { headers });
+
+    if (res.ok) {
+      const text = await res.text();
+      const games: ImportedGame[] = [];
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = parseLichessGame(JSON.parse(trimmed) as LichessGameJson, username);
+          if (parsed) games.push(parsed);
+        } catch {
+          // skip malformed lines
+        }
+      }
+      return games;
+    }
+
+    lastRes = res;
+
+    if (res.status === 404) {
+      // Lichess masks anonymous export throttling as 404 even for valid accounts,
+      // so only report "not found" when the profile endpoint agrees.
+      const exists = await lichessUserExists(username);
+      if (exists === false) throw new Error(`Lichess user not found: ${username}`);
+    } else if (res.status !== 429) {
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          `Lichess rejected the API token (HTTP ${res.status}). Check the token value — ` +
+          `create one at https://lichess.org/account/oauth/token`
+        );
+      }
+      throw new Error(`Lichess API error ${res.status}`);
+    }
+
+    if (attempt < attempts) {
+      const wait = Math.min(65_000, parseRetryAfterMs(res.headers.get("retry-after")) ?? stepWaitMs);
+      await sleep(wait);
     }
   }
-  return games;
+
+  throw new Error(throttleMessage(username, lastRes?.headers.get("retry-after") ?? null, attempts));
 }
 
-export async function importLichess(username: string, max: number): Promise<{ username: string; count: number }> {
-  const games = await fetchLichessGames(username, max);
+export async function importLichess(
+  username: string,
+  max: number,
+  token?: string
+): Promise<{ username: string; count: number }> {
+  const games = await fetchLichessGames(username, max, token);
   const { upsertGame, upsertPosition } = await import("../db");
   for (const g of games) {
     const gameId = upsertGame({

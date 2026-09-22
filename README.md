@@ -124,6 +124,17 @@ scripts/            setup-engine.mjs
 - **Phase 3**: parallel engine instances, LLM cache sharing, PGN export with
   annotations, community comparisons.
 
+## Troubleshooting
+
+* **"Lichess throttled the game export"** — Lichess limits *anonymous* game
+  exports to a few requests per minute and can mask the throttle as a `404` even
+  for valid accounts. Add a personal API token in the import form (or as
+  `LICHESS_TOKEN` in `.env.local`); authenticated limits are several times
+  higher. Create one at <https://lichess.org/account/oauth/token> — no scopes
+  are needed to read public games.
+* **Chess.com returns 403** — the Chess.com API requires a `User-Agent` header.
+  ChessMentor sends one automatically, but a proxy that strips it will fail.
+
 ## License
 
 MIT. Built on open components: Stockfish (GPLv3), chess.js (MIT), react-chessboard (MIT).

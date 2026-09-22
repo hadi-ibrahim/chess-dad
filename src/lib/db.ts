@@ -104,6 +104,11 @@ CREATE TABLE IF NOT EXISTS profiles (
   chesscom_username TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `;
 
 // Reuse a single connection across hot reloads / route invocations.
@@ -482,4 +487,22 @@ export function setProfile(p: Profile): void {
          updated_at=excluded.updated_at`
     )
     .run(p.lichess_username, p.chesscom_username);
+}
+
+// ---------- Settings (key/value) ----------
+
+export function getSetting(key: string): string {
+  const r = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+    | Record<string, unknown>
+    | undefined;
+  return r?.value == null ? "" : String(r.value);
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    )
+    .run(key, value);
 }

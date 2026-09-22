@@ -1,14 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function ImportForm({ onImported }: { onImported: () => void }) {
   const [lichess, setLichess] = useState("");
   const [chesscom, setChesscom] = useState("");
+  const [lichessToken, setLichessToken] = useState("");
+  const [tokenSaved, setTokenSaved] = useState(false);
   const [max, setMax] = useState(100);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => setTokenSaved(Boolean(d.lichessTokenSet)))
+      .catch(() => {});
+  }, []);
 
   async function submit() {
     if (!lichess.trim() && !chesscom.trim()) {
@@ -22,7 +31,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       const res = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lichess, chesscom, max }),
+        body: JSON.stringify({ lichess, chesscom, max, lichessToken }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -33,6 +42,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
         if (data.chesscom) parts.push(`Chess.com: ${data.chesscom.count} games`);
         const errs = (data.errors || []).map((e: { source: string; message: string }) => `${e.source}: ${e.message}`);
         setMessage([parts.join(" · "), ...errs].filter(Boolean).join(" — ") || "Done");
+        if (lichessToken.trim()) setTokenSaved(true);
         onImported();
       }
     } catch {
@@ -41,6 +51,9 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       setBusy(false);
     }
   }
+
+  const field =
+    "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
@@ -53,8 +66,8 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
           <input
             value={lichess}
             onChange={(e) => setLichess(e.target.value)}
-            placeholder="e.g. drwolfenstein"
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            placeholder="e.g. Rooronoa"
+            className={field}
           />
         </label>
         <label className="block">
@@ -62,9 +75,48 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
           <input
             value={chesscom}
             onChange={(e) => setChesscom(e.target.value)}
-            placeholder="e.g. Hikaru"
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            placeholder="e.g. Rooronoa_HaD"
+            className={field}
           />
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-sm text-zinc-300">
+            Lichess API token{" "}
+            <span className="text-zinc-500">(optional — makes imports reliable)</span>
+          </span>
+          <input
+            type="password"
+            value={lichessToken}
+            onChange={(e) => setLichessToken(e.target.value)}
+            placeholder={tokenSaved ? "A token is saved — leave blank to reuse it" : "Paste a personal API token"}
+            autoComplete="off"
+            className={field}
+          />
+          <span className="mt-1 block text-xs text-zinc-500">
+            Create one at{" "}
+            <a
+              href="https://lichess.org/account/oauth/token"
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-400 hover:underline"
+            >
+              lichess.org/account/oauth/token
+            </a>{" "}
+            (no scopes required to read public games). Stored locally in your database.
+          </span>
+          {tokenSaved && (
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch("/api/settings", { method: "DELETE" });
+                setTokenSaved(false);
+                setLichessToken("");
+              }}
+              className="mt-1 text-xs text-zinc-500 underline hover:text-zinc-300"
+            >
+              Clear saved token
+            </button>
+          )}
         </label>
         <label className="block">
           <span className="mb-1 block text-sm text-zinc-300">Games per site (max {max})</span>
@@ -74,7 +126,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
             max={200}
             value={max}
             onChange={(e) => setMax(Number(e.target.value))}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            className={field}
           />
         </label>
         <div className="flex items-end">
@@ -90,7 +142,9 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       {message && <p className="mt-3 text-sm text-emerald-400">{message}</p>}
       {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
       <p className="mt-3 text-xs text-zinc-500">
-        Games are stored locally in SQLite. No API key is required for public accounts.
+        Games are stored locally in SQLite. Lichess limits anonymous game exports to a few requests
+        per minute; a token above (or <code className="rounded bg-zinc-800 px-1">LICHESS_TOKEN</code>{" "}
+        in <code className="rounded bg-zinc-800 px-1">.env.local</code>) removes that friction.
       </p>
     </div>
   );

@@ -3,6 +3,7 @@ import type { NewGame } from "../db";
 import type { Color, PlyInfo } from "../types";
 import { parsePgn } from "../chess-core";
 import { upsertGame, upsertPosition } from "../db";
+import { fetchWithBackoff, USER_AGENT } from "../http";
 
 export interface ImportedGame extends NewGame {
   plies: PlyInfo[];
@@ -78,11 +79,9 @@ function parseChessComGame(g: ChessComGame, username: string): ImportedGame | nu
 }
 
 // Chess.com's public API requires a User-Agent header and returns 403 without one.
-const USER_AGENT = "ChessMentor/1.0 (open-source chess tutor; contact: none)";
-
 export async function fetchChessComGames(username: string, max: number): Promise<ImportedGame[]> {
   const base = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/archives`;
-  const res = await fetch(base, { headers: { "User-Agent": USER_AGENT } });
+  const res = await fetchWithBackoff(base, { headers: { "User-Agent": USER_AGENT } }, { retries: 2 });
   if (res.status === 404) throw new Error(`Chess.com user not found: ${username}`);
   if (res.status === 403) throw new Error("Chess.com blocked the request (missing/invalid User-Agent)");
   if (!res.ok) throw new Error(`Chess.com API error ${res.status}`);
@@ -94,7 +93,7 @@ export async function fetchChessComGames(username: string, max: number): Promise
   const collected: ImportedGame[] = [];
   for (let i = archives.length - 1; i >= 0 && collected.length < max; i--) {
     const archiveUrl = archives[i];
-    const ares = await fetch(archiveUrl, { headers: { "User-Agent": USER_AGENT } });
+    const ares = await fetchWithBackoff(archiveUrl, { headers: { "User-Agent": USER_AGENT } }, { retries: 2 });
     if (!ares.ok) continue;
     const body = (await ares.json()) as { games: ChessComGame[] };
     const games = body.games || [];

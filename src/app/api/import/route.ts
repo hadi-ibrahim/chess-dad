@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { importLichess } from "@/lib/importers/lichess";
 import { importChessCom } from "@/lib/importers/chesscom";
-import { setProfile } from "@/lib/db";
+import { getSetting, setProfile, setSetting } from "@/lib/db";
 import { config } from "@/lib/config";
 
 export const maxDuration = 300;
@@ -11,10 +11,14 @@ export async function POST(request: Request) {
     lichess?: string;
     chesscom?: string;
     max?: number;
+    lichessToken?: string;
   };
 
   const lichess = typeof body.lichess === "string" ? body.lichess.trim() : "";
   const chesscom = typeof body.chesscom === "string" ? body.chesscom.trim() : "";
+  const suppliedToken = typeof body.lichessToken === "string" ? body.lichessToken.trim() : "";
+  if (suppliedToken) setSetting("lichess_token", suppliedToken);
+  const lichessToken = suppliedToken || getSetting("lichess_token");
   const max = Math.min(
     Math.max(typeof body.max === "number" ? Math.floor(body.max) : config.maxGamesPerSource, 1),
     200
@@ -35,7 +39,7 @@ export async function POST(request: Request) {
 
   if (lichess) {
     try {
-      results.lichess = await importLichess(lichess, max);
+      results.lichess = await importLichess(lichess, max, lichessToken);
     } catch (e) {
       results.errors.push({ source: "lichess", message: (e as Error).message });
     }
