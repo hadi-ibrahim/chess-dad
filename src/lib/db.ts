@@ -109,6 +109,28 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS analysis_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  game_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  depth INTEGER,
+  explain INTEGER NOT NULL DEFAULT 1,
+  generate_puzzles INTEGER NOT NULL DEFAULT 1,
+  progress REAL NOT NULL DEFAULT 0,
+  stage TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  error TEXT,
+  worker_id TEXT,
+  leased_until TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON analysis_jobs(status, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_game ON analysis_jobs(game_id);
 `;
 
 // Reuse a single connection across hot reloads / route invocations.

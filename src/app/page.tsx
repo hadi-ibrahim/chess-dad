@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import ImportForm from "@/components/ImportForm";
+import AnalysisQueue from "@/components/AnalysisQueue";
 
 interface Game {
   id: number;
@@ -27,14 +28,23 @@ interface Game {
 
 export default function Home() {
   const [games, setGames] = useState<Game[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [queuedIds, setQueuedIds] = useState<Set<number>>(new Set());
 
   const load = useCallback(async () => {
     const res = await fetch("/api/games");
     const data = await res.json();
-    setGames((data.games as Game[]) || []);
+    const list = (data.games as Game[]) || [];
+    setGames(list);
+    // Drop "queued" markers for games that have since been analysed.
+    setQueuedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<number>();
+      for (const id of prev) {
+        const g = list.find((x) => x.id === id);
+        if (g && !g.analyzed) next.add(id);
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -42,46 +52,15 @@ export default function Home() {
     void load();
   }, [load]);
 
-  async function analyzeGame(id: number) {
-    setBusy(true);
-    setAnalyzeError(null);
-    try {
-      const res = await fetch(`/api/games/${id}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setAnalyzeError(data.error || `Analysis failed (HTTP ${res.status})`);
-      }
-    } finally {
-      setBusy(false);
-      await load();
-    }
-  }
-
-  async function analyzeAll() {
-    // Games without move data cannot be analyzed.
-    const pending = games.filter((g) => !g.analyzed && g.total_plies > 0);
-    if (pending.length === 0) return;
-    setBusy(true);
-    setAnalyzeError(null);
-    setProgress({ done: 0, total: pending.length });
-    let failed = 0;
-    for (let i = 0; i < pending.length; i++) {
-      const res = await fetch(`/api/games/${pending[i].id}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) failed += 1;
-      setProgress({ done: i + 1, total: pending.length });
-    }
-    setProgress(null);
-    setBusy(false);
-    if (failed > 0) setAnalyzeError(`${failed} of ${pending.length} games failed to analyze.`);
-    await load();
+  /** Publish analysis jobs to the queue — returns immediately. */
+  async function enqueue(gameIds: number[]) {
+    if (gameIds.length === 0) return;
+    setQueuedIds((prev) => new Set([...prev, ...gameIds]));
+    await fetch("/api/analysis/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gameIds }),
+    });
   }
 
   async function remove(id: number) {
@@ -98,11 +77,14 @@ export default function Home() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Your games</h1>
         <p className="text-sm text-zinc-400">
-          Import from Lichess &amp; Chess.com, then analyze with Stockfish and review your mistakes.
+          Import from Lichess &amp; Chess.com, then queue them for Stockfish analysis — the app stays
+          usable while games are processed in the background.
         </p>
       </div>
 
       <ImportForm onImported={load} />
+
+      <AnalysisQueue onProgress={load} />
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-400">
@@ -113,29 +95,13 @@ export default function Home() {
         </p>
         {analyzable.length > 0 && (
           <button
-            onClick={analyzeAll}
-            disabled={busy}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            onClick={() => enqueue(analyzable.map((g) => g.id))}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
           >
-            {progress ? `Analyzing ${progress.done}/${progress.total}…` : `Analyze all (${analyzable.length})`}
+            Analyze all ({analyzable.length})
           </button>
         )}
       </div>
-
-      {analyzeError && (
-        <p className="rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-sm text-rose-300">
-          {analyzeError}
-        </p>
-      )}
-
-      {progress && (
-        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className="h-full bg-indigo-500 transition-all"
-            style={{ width: `${(progress.done / progress.total) * 100}%` }}
-          />
-        </div>
-      )}
 
       <div className="overflow-x-auto rounded-xl border border-zinc-800">
         <table className="w-full text-sm">
@@ -181,21 +147,24 @@ export default function Home() {
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-2">
                     {!g.analyzed ? (
-                      g.total_plies > 0 ? (
-                        <button
-                          onClick={() => analyzeGame(g.id)}
-                          disabled={busy}
-                          className="rounded bg-zinc-700 px-2.5 py-1 text-xs font-medium hover:bg-zinc-600 disabled:opacity-50"
-                        >
-                          Analyze
-                        </button>
-                      ) : (
+                      g.total_plies === 0 ? (
                         <span
                           className="rounded bg-zinc-800 px-2.5 py-1 text-xs text-zinc-500"
                           title="No move data — re-import this account to repair it"
                         >
                           no moves
                         </span>
+                      ) : queuedIds.has(g.id) ? (
+                        <span className="rounded bg-indigo-950 px-2.5 py-1 text-xs text-indigo-300">
+                          queued
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => enqueue([g.id])}
+                          className="rounded bg-zinc-700 px-2.5 py-1 text-xs font-medium hover:bg-zinc-600"
+                        >
+                          Analyze
+                        </button>
                       )
                     ) : (
                       <Link

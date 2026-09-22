@@ -63,6 +63,8 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 | `DEEPSEEK_API_KEY` | — | Required when `LLM_PROVIDER=deepseek` |
 | `OLLAMA_MODEL` | `gemma4` | Local model (a fine-tuned Qwen3 chess coach is ideal) |
 | `LICHESS_TOKEN` | — | Optional; raises rate limits / enables private games |
+| `WORKER_CONCURRENCY` | `min(4, cpus−1)` | Games analysed in parallel by the worker pool |
+| `ENGINE_POOL_SIZE` | `WORKER_CONCURRENCY + 1` | Size of the Stockfish process pool |
 
 ## How the analysis works
 
@@ -75,6 +77,23 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 5. **Coach** critical moments (cp loss > 100, or a missed mate/win) through the
    configured LLM — or the offline OKF-grounded fallback.
 6. **Personalize** — mistakes become puzzles, aggregated into a weakness profile.
+
+## Background analysis (queue + workers)
+
+Analysis is asynchronous, so the app stays usable while your library is processed:
+
+1. The UI **publishes** one job per game to a durable queue
+   (`POST /api/analysis/jobs`) and returns immediately — no blocked request.
+2. A **worker pool** (`WORKER_CONCURRENCY`, default `min(4, cpus−1)`) consumes the
+   queue; each game checks out its own Stockfish process from an engine pool, so
+   games analyse in parallel.
+3. The UI **polls** `/api/analysis/status` and renders live progress. Pages stay
+   responsive (a few milliseconds) throughout — roughly 40 games/minute on a
+   12-core machine versus ~6 sequentially.
+
+Jobs are transactional and leased, so a restart requeues anything interrupted;
+failures retry automatically and are surfaced with a one-click retry. See
+[`okf/concepts/analysis-queue.md`](okf/concepts/analysis-queue.md).
 
 ## Design principles
 

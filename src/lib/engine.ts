@@ -63,7 +63,8 @@ class StockfishEngine {
         this.readyResolve = null;
       });
       proc.stdin.write(
-        `uci\nsetoption name Threads value 2\nsetoption name Hash value 128\nisready\n`
+        `uci\nsetoption name Threads value ${config.engineThreads}\n` +
+          `setoption name Hash value ${config.engineHashMb}\nisready\n`
       );
     });
     return this.ready;
@@ -156,9 +157,61 @@ class StockfishEngine {
 
 let engine: StockfishEngine | null = null;
 
+/** A shared, lazily-created single engine (used by low-volume callers). */
 export function getEngine(): StockfishEngine {
   if (!engine) engine = new StockfishEngine();
   return engine;
+}
+
+/**
+ * A fixed-size pool of Stockfish processes.
+ *
+ * Each concurrent game analysis checks out one engine for its entire run, so
+ * the worker pool gets real parallelism instead of serialising on one process.
+ */
+class EnginePool {
+  private all: StockfishEngine[] = [];
+  private idle: StockfishEngine[] = [];
+  private waiters: ((e: StockfishEngine) => void)[] = [];
+
+  constructor(private readonly size: number) {}
+
+  acquire(): Promise<StockfishEngine> {
+    const free = this.idle.pop();
+    if (free) return Promise.resolve(free);
+    if (this.all.length < this.size) {
+      const created = new StockfishEngine();
+      this.all.push(created);
+      return Promise.resolve(created);
+    }
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  release(engine: StockfishEngine): void {
+    const waiting = this.waiters.shift();
+    if (waiting) waiting(engine);
+    else this.idle.push(engine);
+  }
+}
+
+const globalForPool = globalThis as unknown as { __chessmentorEnginePool?: EnginePool };
+
+function getPool(): EnginePool {
+  if (!globalForPool.__chessmentorEnginePool) {
+    globalForPool.__chessmentorEnginePool = new EnginePool(config.enginePoolSize);
+  }
+  return globalForPool.__chessmentorEnginePool;
+}
+
+/** Check out an engine for the duration of `fn`, then return it to the pool. */
+export async function withEngine<T>(fn: (engine: StockfishEngine) => Promise<T>): Promise<T> {
+  const pool = getPool();
+  const engine = await pool.acquire();
+  try {
+    return await fn(engine);
+  } finally {
+    pool.release(engine);
+  }
 }
 
 export type { StockfishEngine };

@@ -1,6 +1,6 @@
 import "server-only";
 import { Chess, type Move } from "chess.js";
-import { getEngine, MATE_SCORE } from "./engine";
+import { withEngine, MATE_SCORE, type StockfishEngine } from "./engine";
 import { config } from "./config";
 import {
   getGame,
@@ -124,7 +124,7 @@ export function detectMotif(i: MotifInput): string | null {
 // Engine evaluation with FEN caching + analytic terminal handling
 // ---------------------------------------------------------------------------
 
-async function evaluatePosition(fen: string, depth: number): Promise<EngineEval> {
+async function evaluatePosition(engine: StockfishEngine, fen: string, depth: number): Promise<EngineEval> {
   if (isCheckmate(fen)) {
     return { bestMove: "", scoreCp: -MATE_SCORE, mate: 0, pv: [], depth };
   }
@@ -141,7 +141,7 @@ async function evaluatePosition(fen: string, depth: number): Promise<EngineEval>
       depth: cached.depth,
     };
   }
-  const e = await getEngine().analyze(fen, depth);
+  const e = await engine.analyze(fen, depth);
   setEngineCache(fen, e.bestMove, e.scoreCp, e.mate, e.pv.join(" "), e.depth);
   return e;
 }
@@ -150,10 +150,18 @@ async function evaluatePosition(fen: string, depth: number): Promise<EngineEval>
 // Orchestrator
 // ---------------------------------------------------------------------------
 
+export interface AnalyzeProgress {
+  stage: string;
+  done: number;
+  total: number;
+  progress: number;
+}
+
 export interface AnalyzeOptions {
   depth?: number;
   explain?: boolean;
   generatePuzzles?: boolean;
+  onProgress?: (info: AnalyzeProgress) => void;
 }
 
 export interface AnalyzeResult {
@@ -164,6 +172,15 @@ export interface AnalyzeResult {
 }
 
 export async function analyzeGame(gameId: number, opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
+  // Hold one engine for the whole game so concurrent games run in parallel.
+  return withEngine((engine) => analyzeGameWithEngine(engine, gameId, opts));
+}
+
+async function analyzeGameWithEngine(
+  engine: StockfishEngine,
+  gameId: number,
+  opts: AnalyzeOptions
+): Promise<AnalyzeResult> {
   const depth = opts.depth ?? config.analysisDepth;
   const explain = opts.explain ?? true;
   const generatePuzzles = opts.generatePuzzles ?? true;
@@ -178,8 +195,14 @@ export async function analyzeGame(gameId: number, opts: AnalyzeOptions = {}): Pr
   fens.push(positions[positions.length - 1].fen_after); // final position
 
   const evals: EngineEval[] = [];
-  for (const fen of fens) {
-    evals.push(await evaluatePosition(fen, depth));
+  for (let i = 0; i < fens.length; i++) {
+    evals.push(await evaluatePosition(engine, fens[i], depth));
+    opts.onProgress?.({
+      stage: "engine",
+      done: i + 1,
+      total: fens.length,
+      progress: ((i + 1) / fens.length) * 0.85,
+    });
   }
 
   let accuracySum = 0;
@@ -289,6 +312,13 @@ export async function analyzeGame(gameId: number, opts: AnalyzeOptions = {}): Pr
   const accuracy = accuracyCount > 0 ? accuracySum / accuracyCount : null;
   markGameAnalyzed(gameId, accuracy ?? -1);
 
+  opts.onProgress?.({
+    stage: explain ? "explain" : "done",
+    done: positions.length,
+    total: positions.length,
+    progress: explain ? 0.9 : 1,
+  });
+
   // Generate coaching explanations for the player's critical moments.
   if (explain) {
     const fresh = getPositions(gameId);
@@ -333,6 +363,7 @@ export async function analyzeGame(gameId: number, opts: AnalyzeOptions = {}): Pr
     }
   }
 
+  opts.onProgress?.({ stage: "done", done: positions.length, total: positions.length, progress: 1 });
   return { gameId, accuracy, criticalCount, puzzleCount };
 }
 

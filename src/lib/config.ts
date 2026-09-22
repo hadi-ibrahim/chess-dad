@@ -1,4 +1,5 @@
 import "server-only";
+import os from "node:os";
 import path from "node:path";
 
 export type LLMProvider = "deepseek" | "ollama" | "off";
@@ -7,6 +8,9 @@ function num(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+const cpus = os.cpus().length || 4;
+const defaultConcurrency = Math.min(4, Math.max(1, cpus - 1));
 
 /**
  * Central, server-only configuration. Every value can be overridden via
@@ -20,6 +24,16 @@ export const config = {
   stockfishPath: process.env.STOCKFISH_PATH || "stockfish",
   analysisDepth: num(process.env.ANALYSIS_DEPTH, 14),
   engineTimeoutMs: num(process.env.ENGINE_TIMEOUT_MS, 60_000),
+  engineThreads: num(process.env.ENGINE_THREADS, 2),
+  engineHashMb: num(process.env.ENGINE_HASH_MB, 64),
+  // Size of the Stockfish process pool. One engine is used per concurrent game.
+  enginePoolSize: num(process.env.ENGINE_POOL_SIZE, defaultConcurrency + 1),
+
+  // Analysis worker (the queue consumer)
+  workerConcurrency: num(process.env.WORKER_CONCURRENCY, defaultConcurrency),
+  workerPollMs: num(process.env.WORKER_POLL_MS, 750),
+  jobLeaseMs: num(process.env.JOB_LEASE_MS, 120_000),
+  jobMaxAttempts: num(process.env.JOB_MAX_ATTEMPTS, 2),
 
   // Import
   maxGamesPerSource: num(process.env.MAX_GAMES_PER_SOURCE, 100),
