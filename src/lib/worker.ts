@@ -1,6 +1,7 @@
 import "server-only";
 import { config } from "./config";
 import { analyzeGame } from "./analysis";
+import { writeProgressBundle } from "./okf-progress";
 import {
   claimNextJob,
   completeJob,
@@ -103,6 +104,12 @@ async function loop(slot: number): Promise<void> {
         },
       });
       completeJob(claimed.id);
+      // Keep the OKF progress document in step with the analysis.
+      try {
+        writeProgressBundle();
+      } catch {
+        // knowledge emission must never fail a job
+      }
     } catch (e) {
       try {
         failJob(claimed.id, (e as Error).message);

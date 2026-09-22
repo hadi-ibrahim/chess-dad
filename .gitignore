@@ -38,6 +38,9 @@ yarn-error.log*
 /data/
 /engines/
 
+# runtime-generated per-user knowledge (personal, never committed)
+/okf/progress/
+
 # vercel
 .vercel
 

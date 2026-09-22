@@ -7,3 +7,5 @@
 * [Accuracy](accuracy.md) — how game accuracy is computed.
 * [Spaced repetition](spaced-repetition.md) — how personal puzzles are scheduled for review.
 * [Analysis queue](analysis-queue.md) — the durable job queue and worker pool behind background analysis.
+* [Game import](game-import.md) — fetching and parsing Lichess/Chess.com games, rate limits, and move formats.
+* [Persistence](persistence.md) — the local-first SQLite data model.

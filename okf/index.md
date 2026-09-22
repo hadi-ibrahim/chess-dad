@@ -12,12 +12,12 @@ notes the app uses to turn engine output into plain-language coaching.
 
 The app both *reads* this bundle (the deterministic coaching fallback grounds
 its explanations in [coaching-rules](concepts/coaching-rules.md)) and *writes*
-to it (per-user progress is emitted as an entity document under
-[progress](progress/) after analysis).
+to it (per-user progress is regenerated under [progress](progress/) after
+analysis).
 
 ## Concepts
 
-* [Concepts](concepts/) — coaching rules, move classification, weakness definitions, tactical motifs, accuracy, and spaced repetition.
+* [Concepts](concepts/) — coaching rules, move classification, weakness definitions, tactical motifs, accuracy, spaced repetition, game import, persistence, and the analysis queue.
 
 ## Entities
 
