@@ -205,40 +205,46 @@ export interface NewGame {
 
 export function upsertGame(g: NewGame): number {
   const db = getDb();
-  const existing = db
-    .prepare("SELECT id FROM games WHERE source = ? AND external_id = ?")
-    .get(g.source, g.external_id ?? "");
-  if (existing) return Number(existing.id);
+  db.prepare(
+    `INSERT INTO games (
+      source, external_id, pgn, white, black, white_rating, black_rating,
+      result, time_control, speed, eco, opening_name, played_at,
+      player_color, player_rating, opponent, opponent_rating, total_plies
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(source, external_id) DO UPDATE SET
+      pgn=excluded.pgn, white=excluded.white, black=excluded.black,
+      white_rating=excluded.white_rating, black_rating=excluded.black_rating,
+      result=excluded.result, time_control=excluded.time_control,
+      speed=excluded.speed, eco=excluded.eco, opening_name=excluded.opening_name,
+      played_at=excluded.played_at, player_color=excluded.player_color,
+      player_rating=excluded.player_rating, opponent=excluded.opponent,
+      opponent_rating=excluded.opponent_rating, total_plies=excluded.total_plies`
+  ).run(
+    g.source,
+    g.external_id ?? "",
+    g.pgn,
+    g.white,
+    g.black,
+    g.white_rating,
+    g.black_rating,
+    g.result,
+    g.time_control,
+    g.speed,
+    g.eco,
+    g.opening_name,
+    g.played_at,
+    g.player_color,
+    g.player_rating,
+    g.opponent,
+    g.opponent_rating,
+    g.total_plies
+  );
 
-  const info = db
-    .prepare(
-      `INSERT INTO games (
-        source, external_id, pgn, white, black, white_rating, black_rating,
-        result, time_control, speed, eco, opening_name, played_at,
-        player_color, player_rating, opponent, opponent_rating, total_plies
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      g.source,
-      g.external_id ?? "",
-      g.pgn,
-      g.white,
-      g.black,
-      g.white_rating,
-      g.black_rating,
-      g.result,
-      g.time_control,
-      g.speed,
-      g.eco,
-      g.opening_name,
-      g.played_at,
-      g.player_color,
-      g.player_rating,
-      g.opponent,
-      g.opponent_rating,
-      g.total_plies
-    );
-  return Number(info.lastInsertRowid);
+  // With ON CONFLICT DO UPDATE the insert reports an unreliable rowid, so re-select.
+  const row = db
+    .prepare("SELECT id FROM games WHERE source = ? AND external_id = ?")
+    .get(g.source, g.external_id ?? "") as { id: number } | undefined;
+  return Number(row?.id ?? 0);
 }
 
 export function listGames(): GameRow[] {
@@ -317,6 +323,26 @@ export function upsertPosition(p: Omit<PositionRow, "id">): void {
     p.key_lesson,
     p.drill_suggestion
   );
+}
+
+/**
+ * Insert a freshly-parsed position only if it is not already stored. Existing
+ * rows are left untouched, so re-importing repairs empty games without wiping
+ * engine analysis.
+ */
+export function insertPositionIfMissing(
+  p: Pick<
+    PositionRow,
+    "game_id" | "ply" | "color" | "fen" | "san" | "uci" | "fen_after" | "clock_seconds"
+  >
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO positions (game_id, ply, color, fen, san, uci, fen_after, clock_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(game_id, ply) DO NOTHING`
+    )
+    .run(p.game_id, p.ply, p.color, p.fen, p.san, p.uci, p.fen_after, p.clock_seconds);
 }
 
 export function getPositions(gameId: number): PositionRow[] {

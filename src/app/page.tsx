@@ -22,12 +22,14 @@ interface Game {
   opponent_rating: number | null;
   analyzed: number;
   accuracy: number | null;
+  total_plies: number;
 }
 
 export default function Home() {
   const [games, setGames] = useState<Game[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/games");
@@ -42,12 +44,17 @@ export default function Home() {
 
   async function analyzeGame(id: number) {
     setBusy(true);
+    setAnalyzeError(null);
     try {
-      await fetch(`/api/games/${id}/analyze`, {
+      const res = await fetch(`/api/games/${id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setAnalyzeError(data.error || `Analysis failed (HTTP ${res.status})`);
+      }
     } finally {
       setBusy(false);
       await load();
@@ -55,20 +62,25 @@ export default function Home() {
   }
 
   async function analyzeAll() {
-    const pending = games.filter((g) => !g.analyzed);
+    // Games without move data cannot be analyzed.
+    const pending = games.filter((g) => !g.analyzed && g.total_plies > 0);
     if (pending.length === 0) return;
     setBusy(true);
+    setAnalyzeError(null);
     setProgress({ done: 0, total: pending.length });
+    let failed = 0;
     for (let i = 0; i < pending.length; i++) {
-      await fetch(`/api/games/${pending[i].id}/analyze`, {
+      const res = await fetch(`/api/games/${pending[i].id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (!res.ok) failed += 1;
       setProgress({ done: i + 1, total: pending.length });
     }
     setProgress(null);
     setBusy(false);
+    if (failed > 0) setAnalyzeError(`${failed} of ${pending.length} games failed to analyze.`);
     await load();
   }
 
@@ -78,6 +90,8 @@ export default function Home() {
   }
 
   const analyzed = games.filter((g) => g.analyzed).length;
+  const analyzable = games.filter((g) => !g.analyzed && g.total_plies > 0);
+  const emptyCount = games.filter((g) => g.total_plies === 0).length;
 
   return (
     <div className="space-y-6">
@@ -93,17 +107,26 @@ export default function Home() {
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-400">
           {games.length} games · {analyzed} analyzed
+          {emptyCount > 0 && (
+            <span className="text-amber-400"> · {emptyCount} without move data (re-import to repair)</span>
+          )}
         </p>
-        {games.some((g) => !g.analyzed) && (
+        {analyzable.length > 0 && (
           <button
             onClick={analyzeAll}
             disabled={busy}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
           >
-            {progress ? `Analyzing ${progress.done}/${progress.total}…` : `Analyze all (${games.filter((g) => !g.analyzed).length})`}
+            {progress ? `Analyzing ${progress.done}/${progress.total}…` : `Analyze all (${analyzable.length})`}
           </button>
         )}
       </div>
+
+      {analyzeError && (
+        <p className="rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-sm text-rose-300">
+          {analyzeError}
+        </p>
+      )}
 
       {progress && (
         <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -158,13 +181,22 @@ export default function Home() {
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-2">
                     {!g.analyzed ? (
-                      <button
-                        onClick={() => analyzeGame(g.id)}
-                        disabled={busy}
-                        className="rounded bg-zinc-700 px-2.5 py-1 text-xs font-medium hover:bg-zinc-600 disabled:opacity-50"
-                      >
-                        Analyze
-                      </button>
+                      g.total_plies > 0 ? (
+                        <button
+                          onClick={() => analyzeGame(g.id)}
+                          disabled={busy}
+                          className="rounded bg-zinc-700 px-2.5 py-1 text-xs font-medium hover:bg-zinc-600 disabled:opacity-50"
+                        >
+                          Analyze
+                        </button>
+                      ) : (
+                        <span
+                          className="rounded bg-zinc-800 px-2.5 py-1 text-xs text-zinc-500"
+                          title="No move data — re-import this account to repair it"
+                        >
+                          no moves
+                        </span>
+                      )
                     ) : (
                       <Link
                         href={`/review/${g.id}`}

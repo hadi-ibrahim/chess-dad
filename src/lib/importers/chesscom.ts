@@ -2,7 +2,7 @@ import "server-only";
 import type { NewGame } from "../db";
 import type { Color, PlyInfo } from "../types";
 import { parsePgn } from "../chess-core";
-import { upsertGame, upsertPosition } from "../db";
+import { upsertGame, insertPositionIfMissing } from "../db";
 import { fetchWithBackoff, USER_AGENT } from "../http";
 
 export interface ImportedGame extends NewGame {
@@ -135,7 +135,7 @@ export async function importChessCom(username: string, max: number): Promise<{ u
       total_plies: g.total_plies,
     });
     for (const p of g.plies) {
-      upsertPosition({
+      insertPositionIfMissing({
         game_id: gameId,
         ply: p.ply,
         color: p.color,
@@ -143,21 +143,7 @@ export async function importChessCom(username: string, max: number): Promise<{ u
         san: p.san,
         uci: p.uci,
         fen_after: p.fenAfter,
-        best_move: null,
-        best_move_san: null,
-        eval_before: null,
-        mate_before: null,
-        eval_after: null,
-        mate_after: null,
-        centipawn_loss: null,
-        classification: null,
-        motif: null,
-        phase: null,
         clock_seconds: p.clockSeconds,
-        is_critical: 0,
-        explanation: null,
-        key_lesson: null,
-        drill_suggestion: null,
       });
     }
   }

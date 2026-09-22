@@ -40,6 +40,31 @@ function formatClock(g: LichessGameJson): string {
   return `${initial}+${increment}`;
 }
 
+/**
+ * Apply one move token, which Lichess may report as UCI ("e2e4", "e7e8q") or as
+ * SAN ("Nf3", "O-O", "Qxd1+"). Trying both keeps the importer working whichever
+ * spelling the export uses.
+ */
+function applyMoveToken(chess: Chess, token: string): Move | null {
+  if (/^[a-h][1-8][a-h][1-8][qrbnQRBN]?$/.test(token)) {
+    try {
+      const m = chess.move({
+        from: token.slice(0, 2),
+        to: token.slice(2, 4),
+        promotion: token.slice(4, 5) || undefined,
+      } as never);
+      if (m) return m;
+    } catch {
+      // not a legal UCI move — fall through and try SAN
+    }
+  }
+  try {
+    return chess.move(token) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function parseLichessGame(g: LichessGameJson, username: string): ImportedGame | null {
   const white = g.players?.white?.user?.name || "Anonymous";
   const black = g.players?.black?.user?.name || "Anonymous";
@@ -53,14 +78,8 @@ function parseLichessGame(g: LichessGameJson, username: string): ImportedGame | 
   const plies: PlyInfo[] = [];
 
   for (let i = 0; i < moveTokens.length; i++) {
-    const uci = moveTokens[i];
     const fen = chess.fen();
-    let move: Move | null = null;
-    try {
-      move = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || undefined } as never);
-    } catch {
-      move = null;
-    }
+    const move = applyMoveToken(chess, moveTokens[i]);
     if (!move) break;
     const clockCs = g.clocks?.[i];
     plies.push({
@@ -217,7 +236,7 @@ export async function importLichess(
   token?: string
 ): Promise<{ username: string; count: number }> {
   const games = await fetchLichessGames(username, max, token);
-  const { upsertGame, upsertPosition } = await import("../db");
+  const { upsertGame, insertPositionIfMissing } = await import("../db");
   for (const g of games) {
     const gameId = upsertGame({
       source: g.source,
@@ -240,7 +259,7 @@ export async function importLichess(
       total_plies: g.total_plies,
     });
     for (const p of g.plies) {
-      upsertPosition({
+      insertPositionIfMissing({
         game_id: gameId,
         ply: p.ply,
         color: p.color,
@@ -248,21 +267,7 @@ export async function importLichess(
         san: p.san,
         uci: p.uci,
         fen_after: p.fenAfter,
-        best_move: null,
-        best_move_san: null,
-        eval_before: null,
-        mate_before: null,
-        eval_after: null,
-        mate_after: null,
-        centipawn_loss: null,
-        classification: null,
-        motif: null,
-        phase: null,
         clock_seconds: p.clockSeconds,
-        is_critical: 0,
-        explanation: null,
-        key_lesson: null,
-        drill_suggestion: null,
       });
     }
   }

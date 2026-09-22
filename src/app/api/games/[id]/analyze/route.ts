@@ -29,6 +29,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
     return NextResponse.json(result);
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    const message = (e as Error).message;
+    // An empty game is a client-side mistake, not a server fault.
+    const status = /no moves/i.test(message) ? 400 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
