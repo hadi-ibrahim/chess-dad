@@ -287,8 +287,14 @@ export default function GameReview({ id }: { id: string }) {
   }, [load]);
 
   useEffect(() => {
+    // `chessmentor-note-` is the pre-rename key; reading it too keeps notes
+    // written before the rename from silently disappearing.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage must be read post-hydration
-    setNotes(localStorage.getItem(`chessmentor-note-${id}`) ?? "");
+    setNotes(
+      localStorage.getItem(`chessdad-note-${id}`) ??
+        localStorage.getItem(`chessmentor-note-${id}`) ??
+        "",
+    );
   }, [id]);
 
   // Deep link from the library's "turning point" column: /review/7?ply=35
@@ -304,7 +310,7 @@ export default function GameReview({ id }: { id: string }) {
 
   function saveNotes(value: string) {
     setNotes(value);
-    localStorage.setItem(`chessmentor-note-${id}`, value);
+    localStorage.setItem(`chessdad-note-${id}`, value);
   }
 
   async function analyze() {

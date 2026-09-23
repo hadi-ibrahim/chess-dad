@@ -1,6 +1,6 @@
 import "server-only";
 
-export const USER_AGENT = "ChessMentor/1.0 (open-source chess tutor)";
+export const USER_AGENT = "ChessDad/1.0 (open-source chess tutor)";
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

@@ -17,8 +17,8 @@ const defaultConcurrency = Math.min(4, Math.max(1, cpus - 1));
  * environment variables (see `.env.example`). Secrets never reach the client.
  */
 export const config = {
-  dataDir: process.env.CHESSMENTOR_DATA_DIR || path.join(process.cwd(), "data"),
-  dbPath: process.env.CHESSMENTOR_DB_PATH || path.join(process.cwd(), "data", "chessmentor.db"),
+  dataDir: process.env.CHESSDAD_DATA_DIR || path.join(process.cwd(), "data"),
+  dbPath: process.env.CHESSDAD_DB_PATH || path.join(process.cwd(), "data", "chessdad.db"),
 
   // Engine
   stockfishPath: process.env.STOCKFISH_PATH || "stockfish",

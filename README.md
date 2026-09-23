@@ -1,4 +1,8 @@
-# ChessMentor ♞
+<p align="center">
+  <img src="public/logo-lockup.jpg" alt="Chess Dad" width="460">
+</p>
+
+<h1 align="center">Chess Dad</h1>
 
 An open-source, local-first chess tutor. Connect your **Lichess** and
 **Chess.com** accounts, import your games, analyze every move with **Stockfish**,
@@ -157,7 +161,7 @@ scripts/            setup-engine.mjs
   higher. Create one at <https://lichess.org/account/oauth/token> — no scopes
   are needed to read public games.
 * **Chess.com returns 403** — the Chess.com API requires a `User-Agent` header.
-  ChessMentor sends one automatically, but a proxy that strips it will fail.
+  Chess Dad sends one automatically, but a proxy that strips it will fail.
 
 ## License
 

@@ -149,17 +149,17 @@ CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(type);
 `;
 
 // Reuse a single connection across hot reloads / route invocations.
-const globalForDb = globalThis as unknown as { __chessmentorDb?: DatabaseSync };
+const globalForDb = globalThis as unknown as { __chessdadDb?: DatabaseSync };
 
 export function getDb(): DatabaseSync {
-  if (globalForDb.__chessmentorDb) return globalForDb.__chessmentorDb;
+  if (globalForDb.__chessdadDb) return globalForDb.__chessdadDb;
   fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
   const db = new DatabaseSync(config.dbPath);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   migrateLegacyQueue(db);
-  globalForDb.__chessmentorDb = db;
+  globalForDb.__chessdadDb = db;
   return db;
 }
 

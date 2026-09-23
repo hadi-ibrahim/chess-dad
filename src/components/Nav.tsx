@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -19,10 +20,15 @@ export default function Nav() {
           width, which used to push the page into horizontal scroll under 571px. */}
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5">
         <Link href="/" className="flex min-h-11 items-center gap-2">
-          <span aria-hidden className="text-2xl">
-            ♞
-          </span>
-          <span className="text-lg font-bold tracking-tight text-zinc-100">ChessMentor</span>
+          {/* Decorative: the wordmark beside it already names the app. */}
+          <Image
+            src="/logo-mark.png"
+            alt=""
+            width={56}
+            height={56}
+            className="h-7 w-7 shrink-0"
+          />
+          <span className="text-lg font-bold tracking-tight text-zinc-100">Chess Dad</span>
         </Link>
         <nav aria-label="Main" className="flex flex-wrap items-center gap-1 text-sm">
           {links.map((l) => {

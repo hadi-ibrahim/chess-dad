@@ -4,7 +4,7 @@ import path from "node:path";
 import { config } from "./config";
 
 /**
- * Minimal, dependency-free reader for the ChessMentor OKF knowledge bundle.
+ * Minimal, dependency-free reader for the Chess Dad OKF knowledge bundle.
  *
  * The bundle is authored as plain markdown with YAML frontmatter (OKF v0.2).
  * This module lets the app consume its own knowledge — e.g. the deterministic

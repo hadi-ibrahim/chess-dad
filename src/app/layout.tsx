@@ -4,7 +4,7 @@ import "./globals.css";
 import Nav from "@/components/Nav";
 
 export const metadata: Metadata = {
-  title: "ChessMentor — Open-Source Chess Coach",
+  title: "Chess Dad — Open-Source Chess Coach",
   description:
     "Analyze your Lichess and Chess.com games with Stockfish, get plain-language coaching, and train your recurring weaknesses.",
 };

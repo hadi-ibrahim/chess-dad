@@ -15,7 +15,7 @@ import { getProfile } from "./db";
  * git-ignored; it is regenerated, never hand-edited.
  */
 
-const ACTOR = "process:chessmentor-analysis";
+const ACTOR = "process:chessdad-analysis";
 
 function slugify(value: string): string {
   return (

@@ -36,13 +36,13 @@ interface WorkerState {
   stop: boolean;
 }
 
-const globalForWorker = globalThis as unknown as { __chessmentorWorker?: WorkerState };
+const globalForWorker = globalThis as unknown as { __chessdadWorker?: WorkerState };
 
 function state(): WorkerState {
-  if (!globalForWorker.__chessmentorWorker) {
-    globalForWorker.__chessmentorWorker = { started: false, running: 0, stop: false };
+  if (!globalForWorker.__chessdadWorker) {
+    globalForWorker.__chessdadWorker = { started: false, running: 0, stop: false };
   }
-  return globalForWorker.__chessmentorWorker;
+  return globalForWorker.__chessdadWorker;
 }
 
 function sleep(ms: number): Promise<void> {

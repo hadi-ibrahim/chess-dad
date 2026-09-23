@@ -37,7 +37,7 @@ export default function Knowledge() {
       <div>
         <h1 className="text-2xl font-bold">Knowledge base</h1>
         <p className="text-sm text-zinc-400">
-          ChessMentor&apos;s coaching knowledge is stored as an{" "}
+          Chess Dad&apos;s coaching knowledge is stored as an{" "}
           <a
             href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md"
             target="_blank"
@@ -82,7 +82,7 @@ export default function Knowledge() {
             </div>
           ) : (
             <div>
-              <h2 className="mb-3 text-lg font-bold">{index?.title ?? "ChessMentor Knowledge"}</h2>
+              <h2 className="mb-3 text-lg font-bold">{index?.title ?? "Chess Dad Knowledge"}</h2>
               <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-300">{index?.body ?? "Loading…"}</pre>
             </div>
           )}

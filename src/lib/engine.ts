@@ -194,13 +194,13 @@ class EnginePool {
   }
 }
 
-const globalForPool = globalThis as unknown as { __chessmentorEnginePool?: EnginePool };
+const globalForPool = globalThis as unknown as { __chessdadEnginePool?: EnginePool };
 
 function getPool(): EnginePool {
-  if (!globalForPool.__chessmentorEnginePool) {
-    globalForPool.__chessmentorEnginePool = new EnginePool(config.enginePoolSize);
+  if (!globalForPool.__chessdadEnginePool) {
+    globalForPool.__chessdadEnginePool = new EnginePool(config.enginePoolSize);
   }
-  return globalForPool.__chessmentorEnginePool;
+  return globalForPool.__chessdadEnginePool;
 }
 
 /** Check out an engine for the duration of `fn`, then return it to the pool. */

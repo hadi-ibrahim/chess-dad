@@ -19,7 +19,7 @@ export async function GET(request: Request) {
 
   const index = readOkfDoc("index.md");
   return NextResponse.json({
-    index: index ? { title: index.frontmatter.title ?? "ChessMentor Knowledge", body: index.body } : null,
+    index: index ? { title: index.frontmatter.title ?? "Chess Dad Knowledge", body: index.body } : null,
     concepts: listOkfDir("concepts"),
     entities: listOkfDir("entities"),
   });

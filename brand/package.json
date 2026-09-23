@@ -1,0 +1,13 @@
+{
+  "name": "chessdad-brand",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Derives the Chess Dad mark, favicon and app icons from the source artwork.",
+  "scripts": {
+    "build": "node make-brand.mjs source/logo-lockup.jpg .."
+  },
+  "devDependencies": {
+    "sharp": "^0.35.4"
+  }
+}

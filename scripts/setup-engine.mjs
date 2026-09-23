@@ -2,7 +2,7 @@
 /**
  * One-command Stockfish setup helper.
  *
- * ChessMentor needs a UCI Stockfish binary. This script:
+ * Chess Dad needs a UCI Stockfish binary. This script:
  *   1. uses an existing `STOCKFISH_PATH` or a `stockfish` on PATH, or
  *   2. installs it via Homebrew (macOS), or
  *   3. downloads the official release binary (Linux) into ./engines.
