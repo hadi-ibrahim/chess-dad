@@ -31,8 +31,11 @@ category aggregated over every analyzed game.
   middlegame, or endgame. A position is `opening` below ply 16, `endgame` once
   no queens remain or at most six rooks/bishops/knights are left on the board,
   and `middlegame` in between. The weakest phase is the one with the highest
-  average centipawn loss.
-* **Time management** — average centipawn loss on moves played with under 30
+  error rate (blunders + mistakes + misses per 100 moves), with median centipawn
+  loss as the tiebreak. A mean would be dominated by a single missed mate, since
+  mate scores are stored as ±100000 centipawns; every average here clamps a
+  move's loss at 1000 cp first.
+* **Time management** — median and (clamped) average centipawn loss on moves played with under 30
   seconds left on the clock, compared with moves played at 30 seconds or more
   (a direct comparison, not a statistical correlation).
 * **Opening performance** — win/draw/loss, win rate, and average game accuracy
@@ -47,3 +50,8 @@ phase-performance grid, an opening-performance table, a time-management panel,
 and a colour-performance panel. Each of the player's own blunders, mistakes, and
 misses with an engine best move is also turned into a personal
 [puzzle](spaced-repetition.md) tagged with its motif.
+
+Phase cards therefore lead with the error rate and show the median loss, because
+those two survive a mate score in the sample; the mean is shown last, clamped.
+Accuracy is averaged per game, not per move — a game's accuracy is a rating, so
+weighting it by move count overstated it (`accSum` ran per position row).
