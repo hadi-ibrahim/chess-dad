@@ -77,6 +77,16 @@ ends — solved, assisted or revealed — the solution is **played out on the bo
 was played in the game with its classification and centipawn loss, repeats the
 source position's explanation and lesson, and links back to that game's review.
 
+# Playing it out
+
+Resolving a drill starts a short continuation from the engine line cached for the
+puzzle's FEN (`engine_cache.pv`): the solution is played on the board, the engine's
+reply follows from the line automatically, and the player answers with the next
+line move — two moves each, capped by `MAX_LINE_PLIES`. A move off the line is
+named but costs nothing, because the drill is already scored; **Show me the rest**
+plays the remainder and the panel closes with the line complete. The continuation
+teaches conversion rather than only recognition.
+
 # Spaced-repetition credit
 
 Only an unassisted solve counts as correct. A puzzle finished after a hint, after
