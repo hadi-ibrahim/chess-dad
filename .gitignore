@@ -47,3 +47,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# impeccable skill: platform-specific engine binary, re-fetched per platform by
+# `npx impeccable install` / `impeccable update` (12MB, darwin-arm64 here)
+/.claude/skills/impeccable/scripts/bin/

@@ -1,6 +1,10 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export default function Nav() {
+  const pathname = usePathname();
   const links = [
     { href: "/", label: "Games" },
     { href: "/insights", label: "Insights" },
@@ -11,21 +15,31 @@ export default function Nav() {
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+      {/* Wraps instead of overflowing: these five labels have a 421px min-content
+          width, which used to push the page into horizontal scroll under 571px. */}
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5">
         <Link href="/" className="flex items-center gap-2">
-          <span className="text-2xl">♞</span>
+          <span aria-hidden className="text-2xl">
+            ♞
+          </span>
           <span className="text-lg font-bold tracking-tight text-zinc-100">ChessMentor</span>
         </Link>
-        <nav className="flex items-center gap-1 text-sm">
-          {links.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              className="rounded-md px-3 py-1.5 font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
-            >
-              {l.label}
-            </Link>
-          ))}
+        <nav aria-label="Main" className="flex flex-wrap items-center gap-1 text-sm">
+          {links.map((l) => {
+            const active = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                aria-current={active ? "page" : undefined}
+                className={`rounded-md px-2.5 py-1.5 font-medium transition-colors sm:px-3 ${
+                  active ? "bg-zinc-800 text-white" : "text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                }`}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
         </nav>
       </div>
     </header>
