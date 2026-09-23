@@ -495,8 +495,8 @@ export default function Insights() {
         </h2>
         <p className="mb-3 text-xs text-zinc-400">
           {showAllOpenings
-            ? `All ${profile.openings.length} openings you have played.`
-            : `Openings you have played at least 5 times (${profile.openings.filter((o) => o.games >= 5).length} of ${profile.openings.length}). A win rate from one or two games is noise, not a finding.`}
+            ? `All ${profile.openings.length} openings you have played — tap one to train its line.`
+            : `Openings you have played at least 5 times (${profile.openings.filter((o) => o.games >= 5).length} of ${profile.openings.length}) — tap one to train its line. A win rate from one or two games is noise, not a finding.`}
         </p>
 
         {/* Table on wide screens; stacked rows where seven columns cannot fit. */}
@@ -531,7 +531,12 @@ export default function Insights() {
                 .map((o) => (
                 <tr key={o.eco}>
                   <td className="px-2 py-2">
-                    <span className="font-mono text-xs text-zinc-400">{o.eco}</span> {o.name || "—"}
+                    <Link
+                      href={`/openings?eco=${encodeURIComponent(o.eco)}`}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      <span className="font-mono text-xs text-zinc-400">{o.eco}</span> {o.name || "—"}
+                    </Link>
                     {o.games < 5 ? (
                       <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
                         no signal
@@ -557,9 +562,12 @@ export default function Insights() {
             .filter((o) => showAllOpenings || o.games >= 5)
             .map((o) => (
             <li key={o.eco} className="rounded-lg border border-zinc-800 p-3">
-              <div className="text-sm text-zinc-100">
+              <Link
+                href={`/openings?eco=${encodeURIComponent(o.eco)}`}
+                className="text-sm text-zinc-100 underline-offset-2 hover:underline"
+              >
                 <span className="font-mono text-xs text-zinc-400">{o.eco}</span> {o.name || "—"}
-              </div>
+              </Link>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-300">
                 <span className="font-mono">{o.games} games</span>
                 <span className="font-mono text-emerald-400">{o.wins}W</span>
