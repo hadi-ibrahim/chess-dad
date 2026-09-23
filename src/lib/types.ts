@@ -37,6 +37,14 @@ export interface GameRow {
   analyzed: number;
   accuracy: number | null;
   created_at: string;
+  /** Flagged moves (mistake + blunder + miss) by the player. */
+  flagged?: number;
+  blunders?: number;
+  /** The costliest of those: where the game turned. */
+  decisive_ply?: number | null;
+  decisive_cpl?: number | null;
+  decisive_san?: string | null;
+  decisive_motif?: string | null;
 }
 
 export interface PositionRow {

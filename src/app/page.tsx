@@ -24,13 +24,19 @@ interface Game {
   analyzed: number;
   accuracy: number | null;
   total_plies: number;
+  flagged?: number;
+  blunders?: number;
+  decisive_ply?: number | null;
+  decisive_cpl?: number | null;
+  decisive_san?: string | null;
+  decisive_motif?: string | null;
 }
 
 const SPEEDS = ["bullet", "blitz", "rapid", "classical"];
 const PAGE_SIZES = [25, 50, 100, 200];
 
 const field =
-  "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
+  "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400";
 
 export default function Home() {
   const [games, setGames] = useState<Game[]>([]);
@@ -53,6 +59,43 @@ export default function Home() {
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+
+  // The library is the loop's front door, so its view lives in the URL: a
+  // filtered set survives a trip into a review and can be shared or reloaded.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    /* eslint-disable react-hooks/set-state-in-effect -- hydrating from the URL on mount */
+    if (sp.get("q")) {
+      setQ(sp.get("q") ?? "");
+      setDebouncedQ(sp.get("q") ?? "");
+    }
+    if (sp.get("source")) setSource(sp.get("source") ?? "");
+    if (sp.get("speed")) setSpeed(sp.get("speed") ?? "");
+    if (sp.get("result")) setResult(sp.get("result") ?? "");
+    if (sp.get("color")) setColor(sp.get("color") ?? "");
+    if (sp.get("analyzed")) setAnalyzedFilter(sp.get("analyzed") ?? "");
+    if (sp.get("from")) setFrom(sp.get("from") ?? "");
+    if (sp.get("to")) setTo(sp.get("to") ?? "");
+    if (sp.get("page")) setPage(Math.max(1, Number(sp.get("page")) || 1));
+    if (sp.get("pageSize")) setPageSize(Number(sp.get("pageSize")) || 50);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    if (debouncedQ.trim()) sp.set("q", debouncedQ.trim());
+    if (source) sp.set("source", source);
+    if (speed) sp.set("speed", speed);
+    if (result) sp.set("result", result);
+    if (color) sp.set("color", color);
+    if (analyzedFilter) sp.set("analyzed", analyzedFilter);
+    if (from) sp.set("from", from);
+    if (to) sp.set("to", to);
+    if (page > 1) sp.set("page", String(page));
+    if (pageSize !== 50) sp.set("pageSize", String(pageSize));
+    const qs = sp.toString();
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+  }, [debouncedQ, source, speed, result, color, analyzedFilter, from, to, page, pageSize]);
 
   // Debounce the search box so typing doesn't fire a request per keystroke.
   useEffect(() => {
@@ -116,6 +159,7 @@ export default function Home() {
   }
 
   async function remove(id: number) {
+    if (!window.confirm("Delete this game and its analysis? Puzzles built from it go too.")) return;
     await fetch(`/api/games/${id}`, { method: "DELETE" });
     await load();
   }
@@ -162,7 +206,7 @@ export default function Home() {
       <AnalysisQueue onProgress={load} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-zinc-400">
+        <p aria-live="polite" className="text-sm text-zinc-400">
           {filtersActive ? (
             <>
               {total} matching · {analyzedInView} analyzed
@@ -231,14 +275,14 @@ export default function Home() {
           value={from}
           onChange={(e) => { setFrom(e.target.value); setPage(1); }}
           className={field}
-          title="From date"
+          aria-label="Played from date"
         />
         <input
           type="date"
           value={to}
           onChange={(e) => { setTo(e.target.value); setPage(1); }}
           className={field}
-          title="To date"
+          aria-label="Played to date"
         />
         {filtersActive && (
           <button onClick={clearFilters} className="rounded-lg bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700">
@@ -256,6 +300,8 @@ export default function Home() {
               <th className="px-3 py-2">Speed</th>
               <th className="px-3 py-2">Opening</th>
               <th className="px-3 py-2">Accuracy</th>
+              <th className="px-3 py-2">Flagged</th>
+              <th className="px-3 py-2">Turning point</th>
               <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2 text-right">Actions</th>
             </tr>
@@ -263,7 +309,7 @@ export default function Home() {
           <tbody className="divide-y divide-zinc-800">
             {games.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-zinc-500">
+                <td colSpan={9} className="px-3 py-8 text-center text-zinc-400">
                   {filtersActive ? "No games match these filters." : "No games yet — import a profile above."}
                 </td>
               </tr>
@@ -279,14 +325,85 @@ export default function Home() {
                     {g.played_at && ` · ${g.played_at.slice(0, 10)}`}
                   </div>
                 </td>
-                <td className="px-3 py-2 font-mono">{g.result}</td>
+                <td className="px-3 py-2">
+                  {(() => {
+                    const won =
+                      (g.player_color === "w" && g.result.startsWith("1-0")) ||
+                      (g.player_color === "b" && g.result.startsWith("0-1"));
+                    const lost =
+                      (g.player_color === "w" && g.result.startsWith("0-1")) ||
+                      (g.player_color === "b" && g.result.startsWith("1-0"));
+                    const draw = /1\/2|½/.test(g.result);
+                    const label = won ? "Won" : lost ? "Lost" : draw ? "Drew" : g.result;
+                    const tone = won
+                      ? "text-emerald-400"
+                      : lost
+                        ? "text-rose-400"
+                        : "text-zinc-300";
+                    return (
+                      <span className={`font-medium ${tone}`}>
+                        {label} <span className="font-mono text-xs text-zinc-400">{g.result}</span>
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td className="px-3 py-2 capitalize">{g.speed || "—"}</td>
                 <td className="px-3 py-2">
-                  <div className="font-mono text-xs text-zinc-400">{g.eco || "—"}</div>
-                  <div className="max-w-[220px] truncate">{g.opening_name || "—"}</div>
+                  {g.eco ? (
+                    <Link
+                      href={`/openings?eco=${encodeURIComponent(g.eco)}`}
+                      className="font-mono text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
+                    >
+                      {g.eco}
+                    </Link>
+                  ) : (
+                    <span className="font-mono text-xs text-zinc-400">—</span>
+                  )}
+                  <div className="max-w-[220px] truncate" title={g.opening_name || undefined}>
+                    {g.opening_name || "—"}
+                  </div>
                 </td>
                 <td className="px-3 py-2 font-mono">
                   {g.analyzed && g.accuracy != null ? `${g.accuracy.toFixed(1)}%` : "—"}
+                </td>
+                <td className="px-3 py-2">
+                  {g.analyzed && g.flagged != null ? (
+                    <span className="font-mono">
+                      {g.flagged}
+                      {g.blunders ? (
+                        <span className="text-rose-400"> ({g.blunders} blunders)</span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {g.analyzed && g.decisive_ply != null ? (
+                    <Link
+                      href={`/review/${g.id}?ply=${g.decisive_ply}`}
+                      className="underline-offset-2 hover:underline"
+                      title="Open the review at this move"
+                    >
+                      <span className="font-mono text-xs text-zinc-400">
+                        {Math.floor(g.decisive_ply / 2) + 1}
+                        {g.decisive_ply % 2 === 0 ? "." : "…"}
+                      </span>{" "}
+                      <span className="text-zinc-200">{g.decisive_san}</span>
+                      {g.decisive_cpl != null ? (
+                        <span className="ml-1 font-mono text-xs text-rose-300">
+                          −{(g.decisive_cpl / 100).toFixed(1)}
+                        </span>
+                      ) : null}
+                      {g.decisive_motif ? (
+                        <span className="ml-1 text-xs text-zinc-400">
+                          {g.decisive_motif.replace(/-/g, " ")}
+                        </span>
+                      ) : null}
+                    </Link>
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
                 </td>
                 <td className="px-3 py-2 capitalize">{g.source}</td>
                 <td className="px-3 py-2">

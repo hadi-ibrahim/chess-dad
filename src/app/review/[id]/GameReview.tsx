@@ -291,6 +291,17 @@ export default function GameReview({ id }: { id: string }) {
     setNotes(localStorage.getItem(`chessmentor-note-${id}`) ?? "");
   }, [id]);
 
+  // Deep link from the library's "turning point" column: /review/7?ply=35
+  useEffect(() => {
+    if (positions.length === 0) return;
+    const raw = new URLSearchParams(window.location.search).get("ply");
+    if (raw == null) return;
+    const ply = Number(raw);
+    if (!Number.isInteger(ply) || ply < 0 || ply >= positions.length) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the deep link selects a ply once the game loads
+    setCurrentPly(ply);
+  }, [positions.length]);
+
   function saveNotes(value: string) {
     setNotes(value);
     localStorage.setItem(`chessmentor-note-${id}`, value);

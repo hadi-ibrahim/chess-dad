@@ -215,6 +215,12 @@ function toGameRow(r: Record<string, unknown>): GameRow {
     analyzed: Number(r.analyzed ?? 0),
     accuracy: r.accuracy == null ? null : Number(r.accuracy),
     created_at: String(r.created_at ?? ""),
+    flagged: r.flagged == null ? undefined : Number(r.flagged),
+    blunders: r.blunders == null ? undefined : Number(r.blunders),
+    decisive_ply: r.decisive_ply == null ? null : Number(r.decisive_ply),
+    decisive_cpl: r.decisive_cpl == null ? null : Number(r.decisive_cpl),
+    decisive_san: r.decisive_san == null ? null : String(r.decisive_san),
+    decisive_motif: r.decisive_motif == null ? null : String(r.decisive_motif),
   };
 }
 
@@ -422,8 +428,25 @@ export function queryGames(query: GameQuery): GameQueryResult {
 
   const rows = db
     .prepare(
-      `SELECT * FROM games ${whereSql}
-       ORDER BY played_at DESC, id DESC
+      `SELECT g.*,
+              (SELECT COUNT(*) FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification IN ('mistake','blunder','miss')) AS flagged,
+              (SELECT COUNT(*) FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification = 'blunder') AS blunders,
+              (SELECT p.ply FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification IN ('mistake','blunder','miss')
+                 ORDER BY p.centipawn_loss DESC LIMIT 1) AS decisive_ply,
+              (SELECT MIN(p.centipawn_loss, 1000) FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification IN ('mistake','blunder','miss')
+                 ORDER BY p.centipawn_loss DESC LIMIT 1) AS decisive_cpl,
+              (SELECT p.san FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification IN ('mistake','blunder','miss')
+                 ORDER BY p.centipawn_loss DESC LIMIT 1) AS decisive_san,
+              (SELECT p.motif FROM positions p WHERE p.game_id = g.id AND p.color = g.player_color
+                 AND p.classification IN ('mistake','blunder','miss')
+                 ORDER BY p.centipawn_loss DESC LIMIT 1) AS decisive_motif
+       FROM games g ${whereSql}
+       ORDER BY g.played_at DESC, g.id DESC
        LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset) as Record<string, unknown>[];
