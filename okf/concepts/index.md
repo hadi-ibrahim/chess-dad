@@ -11,4 +11,5 @@
 * [Persistence](persistence.md) — the local-first SQLite data model.
 * [Games browser](games-browser.md) — how the library is searched, filtered, and paginated.
 * [Review screen](review-screen.md) — how the per-game review flags critical moves and separates your mistakes from your opponent's.
+* [Openings screen](openings-screen.md) — how the trainer steps and practises a line, and how it tells a real deviation from running out of theory.
 * [Puzzles screen](puzzles-screen.md) — how the training screen filters drills by motif, hints in two stages, and credits assisted solves.
