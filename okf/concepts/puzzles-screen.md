@@ -31,14 +31,28 @@ from.
 
 Puzzles are grouped by their `theme` — the motif the analysis detected — with a
 count per category, plus a **Due now** toggle that filters to puzzles whose
-`due_at` has passed (or is unset). Categories are client-side filters over the
-single `GET /api/puzzles` payload; changing one resets the drill set and the
-board. The rail renders at most 60 rows at a time with a **Show more** control
-rather than every puzzle, and shows each entry's `solved_count` / `fail_count`.
+`due_at` has passed (or is unset) and is **on by default**. Categories are
+client-side filters over the single `GET /api/puzzles` payload; changing one
+resets the drill set and the board.
+
+The drill set is ordered as a review queue, not as an import list: never-reviewed
+positions first (`due_at` unset), then the most overdue, then the lowest `ease`.
+Answering a puzzle does not reshuffle the queue mid-session — its new `due_at`
+only removes it from the set the next time one is built — so the explanation just
+earned stays on screen until the player advances.
+
+The rail renders at most 60 rows at a time with a **Show more** control rather
+than every puzzle, showing each entry's `solved_count` / `fail_count`, and it
+grows and scrolls itself to keep the active row visible (without moving the
+page).
 
 # Solving
 
-The board renders `fen` with the side to move at the bottom. Dragging a piece:
+The board renders `fen` with the side to move at the bottom, and the status strip
+names the opponent's last move (`prev_san`) so the position has context. A move can
+be played by dragging or by clicking a piece and then its destination; every square
+is a real button, so `Tab` + `Enter` solves a puzzle without a pointer. Dragging a
+piece:
 
 * plays the **solution** (`lan === solution_uci`) — the drill is solved;
 * plays any other **legal** move — the attempt is drawn on the board (from/to
@@ -57,9 +71,11 @@ The hint control has two stages, so it teaches rather than reveals:
 2. **Where to** — the destination is tinted and the solution is drawn as a green
    arrow.
 
-**Show solution** draws the same arrow without requiring the move, and the
-feedback panel then names the move, repeats the source position's explanation and
-lesson, and links back to that game's review.
+**Show solution** draws the same arrow without requiring the move. When a drill
+ends — solved, assisted or revealed — the solution is **played out on the board**
+(`fen` advances, green arrow and `✓`), and the panel names the move, states what
+was played in the game with its classification and centipawn loss, repeats the
+source position's explanation and lesson, and links back to that game's review.
 
 # Spaced-repetition credit
 
@@ -72,6 +88,8 @@ library.
 
 # Keyboard
 
-`H` advances the hint, `R` resets the current drill, `N` moves to the next puzzle
-in the filtered set. Every control is a real button, so tab and Enter work
-throughout.
+`H` advances the hint, `R` resets the current drill, `N` and `P` move to the next
+and previous puzzle in the filtered set. Every control is a real button and every
+square is focusable, so the whole loop works from the keyboard. The action row is
+sticky at the bottom of the viewport on small screens, where the board pushes it
+below the fold. A session line counts clean solves and hinted solves as you go.
