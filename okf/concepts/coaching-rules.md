@@ -50,9 +50,10 @@ undefended, and whether the opponent has a forcing reply.
 
 ## Move classification: mistake
 
-You lost a meaningful advantage (one to three pawns). The idea you missed was
-tactical or positional rather than forced; look for the opponent's threats and
-your own candidate moves before committing.
+Your move gave up real value (one to three pawns). Most often the missed idea
+was a defensive resource or a forcing reply. Check the opponent's threats and your
+own candidate moves before committing, and when you are on top, convert calmly
+rather than forcing matters.
 
 ## Move classification: miss
 

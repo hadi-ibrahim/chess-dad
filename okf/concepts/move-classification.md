@@ -90,7 +90,7 @@ and a brilliancy carry a glyph; neutral moves (`best`, `great`, `good`, `book`,
 | Inaccuracy | `?!` | 50–100 centipawns lost |
 | Mistake | `?` | 100–300 centipawns lost |
 | Blunder | `??` | Over 300 centipawns lost |
-| Miss | `×` | A forced mate or winning tactic was available |
+| Miss | `!?` | A forced mate or winning tactic was available — `!?` rather than `×`, which reads as capture notation beside SAN |
 
 [^chesscom-review]: Chess.com's Game Review uses a comparable centipawn-loss
   model to grade moves; ChessMentor's thresholds are its own open-source
