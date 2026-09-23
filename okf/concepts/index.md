@@ -10,3 +10,4 @@
 * [Game import](game-import.md) — fetching and parsing Lichess/Chess.com games, rate limits, and move formats.
 * [Persistence](persistence.md) — the local-first SQLite data model.
 * [Games browser](games-browser.md) — how the library is searched, filtered, and paginated.
+* [Review screen](review-screen.md) — how the per-game review flags critical moves and separates your mistakes from your opponent's.

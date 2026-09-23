@@ -5,6 +5,17 @@ description: The durable typed job queue and worker pool that run imports and en
 tags: [architecture, queue, worker, engine, performance]
 status: stable
 generated: { by: chessmentor/1.0, at: 2026-09-22 }
+updated: { by: "process:okf-code-sync", at: 2026-09-23 }
+sources:
+  - id: queue-code
+    resource: src/lib/queue.ts
+    title: ChessMentor — durable job queue, leases, and retry policy
+  - id: worker-code
+    resource: src/lib/worker.ts
+    title: ChessMentor — worker pool and job dispatch
+  - id: config-code
+    resource: src/lib/config.ts
+    title: ChessMentor — concurrency, lease, and pool defaults
 ---
 
 # Overview
@@ -32,9 +43,10 @@ is skipped rather than queued twice.
 
 # Chaining
 
-An `import` job with `analyzeAfter` **enqueues analysis for the games it just
-brought in**, so importing and analysing is one action rather than two. The
-import's result records how much it did (`{ imported, analysisQueued }`).
+An `import` job with `analyzeAfter` **enqueues analysis for the imported games
+that have moves and are not yet analysed**, so importing and analysing is one
+action rather than two. The import's result records how much it did
+(`{ source, username, imported, analysisQueued }`).
 
 # The queue
 
@@ -52,26 +64,30 @@ surviving restarts. Alongside routing fields it tracks `status`, `progress`,
 
 Claiming is atomic inside a transaction. A lease plus periodic heartbeats let a
 crashed worker's job be reclaimed; on startup any `running` row is orphaned and
-requeued immediately — without spending a retry attempt.
+requeued immediately — the interrupted attempt is handed back rather than spent
+(a restart is not a failure), unless it had already exhausted its attempts, in
+which case it is marked `failed`.
 
 # The worker pool
 
-`workerConcurrency` loops (default `min(4, cpus − 1)`) each claim a job and
-dispatch on its type. Because the CPU-heavy work happens in Stockfish **child
-processes**, the Node event loop stays free and the HTTP server remains
+`workerConcurrency` loops (default `min(4, max(1, cpus − 1))`) each claim a job
+and dispatch on its type. Because the CPU-heavy work happens in Stockfish
+**child processes**, the Node event loop stays free and the HTTP server remains
 responsive — pages render in a few milliseconds while hundreds of games are
 processed.
 
 Analysis concurrency is backed by an engine **pool** (`enginePoolSize`, default
-`workerConcurrency + 1`): each game checks out one Stockfish process for its
-whole run, so games genuinely run in parallel instead of serialising. The extra
-engine keeps interactive single-game analysis from waiting behind the queue.
+the same derived concurrency `+ 1`): each game checks out one Stockfish process
+for its whole run, so games genuinely run in parallel instead of serialising.
+The extra engine keeps interactive single-game analysis from waiting behind the
+queue.
 
 # Progress and control
 
 `/api/jobs/status` reports queue depth, per-type counts, per-job progress, and
-worker state; the UI polls it to render the live progress panel. Jobs can be
-cancelled while queued, retried after failing, and cleared once finished.
+worker state; the UI polls it to render the live progress panel. Control is
+`DELETE /api/jobs?action=cancel|retry|clear` — cancelling every `queued` job,
+retrying every `failed` job, or deleting every `done`/`canceled` one.
 
 # Failure handling
 

@@ -5,6 +5,11 @@ description: How the game library is searched, filtered, and paginated, and what
 tags: [games, search, filters, pagination, ui]
 status: stable
 generated: { by: chessmentor/1.0, at: 2026-09-22 }
+updated: { by: "process:okf-code-sync", at: 2026-09-23 }
+sources:
+  - id: games-query-code
+    resource: src/lib/db.ts
+    title: ChessMentor — queryGames() search, filters, and paging
 ---
 
 # Overview
@@ -37,6 +42,7 @@ to the whole day before comparison.
 
 # Pagination
 
-Queries take `page` and `pageSize` (25–200, default 50) and return that page
-plus `total`, `analyzed`, and `pageCount`. An out-of-range page is clamped to
-the last page rather than returning nothing, so a stale link still shows results.
+Queries take `page` and `pageSize` (the server clamps it to 1–200; the UI offers
+25, 50, 100, or 200, default 50) and return that page plus `total`, `analyzed`,
+and `pageCount`. An out-of-range page is clamped to the last page rather than
+returning nothing, so a stale link still shows results.

@@ -5,10 +5,17 @@ description: How ChessMentor turns engine analysis into tier-appropriate, plain-
 tags: [coaching, engine, llm, explanation]
 status: stable
 generated: { by: chessmentor/1.0, at: 2026-09-22 }
+updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: engine-first
     resource: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
     title: OKF specification (referenced for knowledge formatting, not coaching content)
+  - id: llm-code
+    resource: src/lib/llm.ts
+    title: ChessMentor — explainPosition() and the deterministic fallback
+  - id: okf-reader-code
+    resource: src/lib/okf.ts
+    title: ChessMentor — readCoachingRules() reader for these sections
 ---
 
 # Overview
@@ -31,7 +38,9 @@ Every coaching explanation has three parts:
 
 When no LLM is configured (or an LLM call fails), the app generates an
 explanation from these rules using the engine data and the motif tag. The
-sections below map each classification to its fallback lesson.
+sections below are the fallback lessons the app reads back for blunder, mistake,
+miss, inaccuracy, and good; the `explanation` itself is assembled from the
+engine's evaluation and best move.
 
 ## Move classification: blunder
 
@@ -47,8 +56,9 @@ your own candidate moves before committing.
 
 ## Move classification: miss
 
-You had a winning chance — a forced mate or a large material gain — and let it
-slip. Train yourself to spot forcing moves (checks, captures, threats) first.
+You had a winning chance — a forced mate or a clearly winning position (at least
++2.00) — and let it slip. Train yourself to spot forcing moves (checks, captures,
+threats) first.
 
 ## Move classification: inaccuracy
 

@@ -5,6 +5,7 @@ description: How ChessMentor fetches and parses games from Lichess and Chess.com
 tags: [import, lichess, chesscom, api, rate-limits]
 status: stable
 generated: { by: chessmentor/1.0, at: 2026-09-22 }
+updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: lichess-export
     resource: https://lichess.org/api
@@ -15,6 +16,12 @@ sources:
   - id: chesscom-api
     resource: https://www.chess.com/news/view/published-data-api
     title: Chess.com Published-Data API
+  - id: lichess-importer-code
+    resource: src/lib/importers/lichess.ts
+    title: ChessMentor — Lichess fetching, throttling, and move parsing
+  - id: chesscom-importer-code
+    resource: src/lib/importers/chesscom.ts
+    title: ChessMentor — Chess.com archives, clocks, and variant filtering
 ---
 
 # Overview
@@ -23,7 +30,8 @@ An import runs as a queued `import` [job](job-queue.md) rather than inside the
 HTTP request: games are fetched from the site's public API and replayed with
 chess.js into per-ply positions, so every game can later be analysed and
 reviewed.[^lichess-export][^chesscom-api] With `analyzeAfter`, the import also
-enqueues analysis for the games it brought in.
+enqueues analysis for the imported games that have moves and are not yet
+analysed. `max` is clamped to 1–200 (default `MAX_GAMES_PER_SOURCE`, 100).
 
 # Lichess
 
@@ -48,15 +56,18 @@ The importer therefore:
 
 * retries after a wait on both `429` (honouring `Retry-After`) and a masked `404`;
 * tells "user not found" apart from throttling by checking the profile endpoint;
+* rejects a bad token immediately on `401`/`403`, pointing at the token page;
 * accepts a personal API token — from the import form or `LICHESS_TOKEN` — whose
-  authenticated limits are several times higher.
+  authenticated limits are several times higher. A supplied token is stored in
+  the `settings` table, so it survives restarts without an env change.
 
 # Chess.com
 
 The archives endpoint lists monthly game URLs; games are read newest-first from
-the most recent months until `max` is reached. The API **requires a `User-Agent`**
-header and rejects requests without one with `403`. Chess.com supplies full PGN,
-which is parsed with chess.js, and `[%clk …]` annotations become clock times.
+the most recent months until `max` is reached, skipping non-chess variants
+(`rules != "chess"`). The API **requires a `User-Agent`** header and rejects
+requests without one with `403`. Chess.com supplies full PGN, which is parsed
+with chess.js, and `[%clk …]` annotations become clock times.
 
 # Idempotence and repair
 

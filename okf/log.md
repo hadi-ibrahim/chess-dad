@@ -7,3 +7,7 @@
 * **Update**: added [Persistence](concepts/persistence.md) documenting the local-first SQLite data model.
 * **Update**: the analysis-only queue became a general typed [Job queue](concepts/job-queue.md) — imports and analysis now share one worker pool, with imports claimed first and optionally chaining into analysis.
 * **Update**: added [Games browser](concepts/games-browser.md) — the library is now searched, filtered, and paginated server-side.
+
+## 2026-09-23
+* **Update**: code sync — corrected move-classification thresholds and evaluation order, the engine-detected [tactical motif](concepts/tactical-motifs.md) tags, weakness-profiling details, [job-queue](concepts/job-queue.md) defaults and control routes, SM-2 clamps, import limits, and pagination bounds against the source.
+* **Update**: added [Review screen](concepts/review-screen.md) documenting critical-moment flagging (`is_critical === 1`), the split between your mistakes and chances to punish, the coach panel showing the position before the move, and the annotation glyphs (?? blunder, ? mistake, ?! inaccuracy, × miss, !! brilliant) shown with colour.
