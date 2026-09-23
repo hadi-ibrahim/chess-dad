@@ -115,6 +115,33 @@ function fmtCp(cp: number): string {
 }
 
 /**
+ * Motif tags are detector keys, not English: they need a noun phrase before they
+ * can sit in a sentence. "The pattern involved a tactical." was the old output.
+ */
+const MOTIF_PHRASES: Record<string, string> = {
+  "hung-piece": "a hung piece",
+  "missed-capture": "a missed capture",
+  "missed-mate": "a missed mate",
+  tactical: "a tactical opportunity",
+};
+
+/** Motif-specific lessons, used only when the OKF rule has no lesson text. */
+const MOTIF_LESSONS: Record<string, string> = {
+  "hung-piece": "Check whether your move leaves a piece where it can simply be taken.",
+  "missed-capture": "Scan every capture before you commit: material was available here.",
+  "missed-mate": "With the king exposed, calculate forcing moves first — checks, captures, threats.",
+  tactical: "Look for your opponent's forcing reply before you commit to a plan.",
+};
+
+/** Article-free motif names for drill text ("Solve 10 hung piece puzzles"). */
+const MOTIF_TOPICS: Record<string, string> = {
+  "hung-piece": "hung piece",
+  "missed-capture": "missed capture",
+  "missed-mate": "missed mate",
+  tactical: "tactical opportunity",
+};
+
+/**
  * Deterministic, offline coaching fallback grounded in the OKF knowledge base.
  * Always available; keeps explanations working with no API key.
  */
@@ -142,24 +169,35 @@ function fallbackExplain(i: ExplainInput): LLMExplanation {
     ` (a ${lostPawns}-pawn swing).`;
 
   const motifPhrase = i.motif
-    ? ` The pattern involved a ${i.motif.replace(/-/g, " ")}.`
+    ? ` The pattern was ${MOTIF_PHRASES[i.motif] ?? i.motif.replace(/-/g, " ")}.`
     : "";
+
+  // Which way the game was going decides what the lesson should say: "you let an
+  // advantage slip" is wrong (and was previously printed) for a player who was
+  // already worse.
+  const contextPhrase =
+    i.evalBeforeCp >= 50
+      ? " You had the better position before this move."
+      : i.evalBeforeCp <= -50
+        ? " You were already worse, so the practical aim was to hold."
+        : "";
 
   const rule = rules[cls];
   const keyLesson =
     rule?.lesson?.trim() ||
-    (i.motif
-      ? `Before moving, check whether your move leaves a piece undefended or misses a ${i.motif.replace(/-/g, " ")}.`
-      : "Before moving, look for your opponent's threats and your own forcing moves.");
+    MOTIF_LESSONS[i.motif ?? ""] ||
+    "Before moving, look for your opponent's threats and your own forcing moves.";
 
   const drillSuggestion =
     rule?.drill?.trim() ||
     (i.motif
-      ? `Solve 10 ${i.motif.replace(/-/g, " ")} puzzles, then replay this position and find ${i.bestSan || "the best move"}.`
+      ? `Solve 10 ${MOTIF_TOPICS[i.motif] ?? i.motif.replace(/-/g, " ")} puzzles, then replay this position and find ${i.bestSan || "the best move"}.`
       : `Replay this position and try to find ${i.bestSan || "the best move"} on your own before checking the engine.`);
 
   return {
-    explanation: `On your move you ${verb}. ${bestPhrase} ${evalPhrase}${motifPhrase}`.replace(/\s+/g, " ").trim(),
+    explanation: `On your move you ${verb}. ${bestPhrase} ${evalPhrase}${contextPhrase}${motifPhrase}`
+      .replace(/\s+/g, " ")
+      .trim(),
     key_lesson: keyLesson,
     drill_suggestion: drillSuggestion,
   };

@@ -206,12 +206,8 @@ function CriticalMoments({
                 </span>
                 <span className="font-semibold" style={{ color: colour }}>
                   {p.san}
+                  {classGlyph(p.classification)}
                 </span>
-                {classGlyph(p.classification) ? (
-                  <span className="text-xs font-bold" style={{ color: colour }} aria-hidden>
-                    {classGlyph(p.classification)}
-                  </span>
-                ) : null}
                 <span className="ml-auto font-mono text-xs text-zinc-300">
                   {p.centipawn_loss != null ? `${MINUS}${(p.centipawn_loss / 100).toFixed(1)}` : ""}
                 </span>
@@ -246,6 +242,7 @@ export default function GameReview({ id }: { id: string }) {
   const [depth, setDepth] = useState(14);
   const [notes, setNotes] = useState("");
   const [flipped, setFlipped] = useState(false);
+  const [confirmAnalyze, setConfirmAnalyze] = useState(false);
   const [tab, setTab] = useState<"yours" | "theirs">("yours");
 
   const load = useCallback(async () => {
@@ -276,9 +273,7 @@ export default function GameReview({ id }: { id: string }) {
   }
 
   async function analyze() {
-    if (game?.analyzed && !window.confirm("Re-run the engine? This replaces the stored analysis for this game.")) {
-      return;
-    }
+    setConfirmAnalyze(false);
     setAnalyzing(true);
     setError(null);
     try {
@@ -355,20 +350,29 @@ export default function GameReview({ id }: { id: string }) {
     [positions, playerColor]
   );
 
-  const activeList = tab === "yours" ? playerCritical : theirCritical;
-  const nextCritical = useMemo(() => {
-    const after = activeList.filter((p) => p.ply > currentPly);
-    return after.length > 0 ? after[0] : null;
-  }, [activeList, currentPly]);
+  // The rail reads worst-first (the copy promises it); navigation stays in move
+  // order so shift+arrow walks the game rather than jumping around the list.
+  const navList = tab === "yours" ? playerCritical : theirCritical;
+  const activeList = useMemo(
+    () => [...navList].sort((a, b) => (b.centipawn_loss ?? -1) - (a.centipawn_loss ?? -1)),
+    [navList]
+  );
+  const nextCritical = useMemo(() => navList.find((p) => p.ply > currentPly) ?? null, [navList, currentPly]);
   const prevCritical = useMemo(() => {
-    const before = activeList.filter((p) => p.ply < currentPly);
+    const before = navList.filter((p) => p.ply < currentPly);
     return before.length > 0 ? before[before.length - 1] : null;
-  }, [activeList, currentPly]);
+  }, [navList, currentPly]);
 
   const summary = useMemo(() => {
     const counts = { blunder: 0, mistake: 0, miss: 0, inaccuracy: 0 };
+    const hits = { best: 0, brilliant: 0, great: 0, good: 0 };
     const phaseCounts: Record<string, number> = {};
     const motifCounts: Record<string, number> = {};
+    for (const p of positions) {
+      if (p.color === playerColor && p.classification && p.classification in hits) {
+        hits[p.classification as keyof typeof hits] += 1;
+      }
+    }
     for (const p of playerCritical) {
       if (p.classification && p.classification in counts) {
         counts[p.classification as keyof typeof counts] += 1;
@@ -381,8 +385,8 @@ export default function GameReview({ id }: { id: string }) {
       (acc, p) => (acc == null || (p.centipawn_loss ?? 0) > (acc.centipawn_loss ?? 0) ? p : acc),
       null
     );
-    return { counts, phaseCounts, motifTop, worst, first: playerCritical[0] ?? null };
-  }, [playerCritical]);
+    return { counts, hits, phaseCounts, motifTop, worst, first: playerCritical[0] ?? null };
+  }, [playerCritical, positions, playerColor]);
 
   const moveListItems: MoveListItem[] = useMemo(
     () =>
@@ -482,6 +486,24 @@ export default function GameReview({ id }: { id: string }) {
   const moverClock = current ? clockLabel(current.clock_seconds) : null;
   const underPressure = current != null && current.clock_seconds != null && current.clock_seconds < 30;
 
+  // Reassurance at the high-stakes moment: a flagged move is not the whole story,
+  // and the opponent usually failed to punish it.
+  const reply = current ? positions[current.ply + 1] ?? null : null;
+  const reassurance: string[] = [];
+  if (current && playedIsMine && isError(current.classification)) {
+    if (reply && isError(reply.classification)) {
+      reassurance.push(
+        `They didn't punish it — their reply ${reply.san} was also flagged (${classLabel(
+          reply.classification
+        ).toLowerCase()}, ${MINUS}${((reply.centipawn_loss ?? 0) / 100).toFixed(1)}).`
+      );
+    }
+    if (current.classification === "miss") {
+      reassurance.push("That was a winning chance — worth replaying until you can see it yourself.");
+    }
+    if (result.tone === "win") reassurance.push("You still won this game.");
+  }
+
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -496,14 +518,15 @@ export default function GameReview({ id }: { id: string }) {
           <p className="text-sm text-zinc-400">
             {game.opening_name ? `${game.opening_name} (${game.eco})` : "Opening unknown"} ·{" "}
             <span className="capitalize">{game.speed}</span> · {game.source}
+            {game.analyzed && game.accuracy != null ? (
+              <>
+                {" · "}
+                <span className="font-semibold text-indigo-300">{game.accuracy.toFixed(1)}% accuracy</span>
+              </>
+            ) : null}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {game.analyzed && game.accuracy != null && (
-            <span className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm">
-              Accuracy <span className="font-bold text-indigo-300">{game.accuracy.toFixed(1)}%</span>
-            </span>
-          )}
           <label className="sr-only" htmlFor="depth">
             Engine depth
           </label>
@@ -517,15 +540,34 @@ export default function GameReview({ id }: { id: string }) {
             <option value={14}>Standard (14)</option>
             <option value={18}>Deep (18)</option>
           </select>
-          <button
-            type="button"
-            onClick={analyze}
-            disabled={analyzing}
-            aria-busy={analyzing}
-            className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-50"
-          >
-            {analyzing ? "Analyzing…" : game.analyzed ? "Re-analyze" : "Analyze"}
-          </button>
+          {confirmAnalyze ? (
+            <>
+              <button
+                type="button"
+                onClick={analyze}
+                className="rounded-lg border border-amber-700 bg-amber-950/40 px-3 py-1.5 text-sm font-semibold text-amber-200 hover:bg-amber-950/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+              >
+                Replace stored analysis
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmAnalyze(false)}
+                className="rounded-lg px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => (game.analyzed ? setConfirmAnalyze(true) : analyze())}
+              disabled={analyzing}
+              aria-busy={analyzing}
+              className="rounded-lg border border-zinc-700 px-4 py-1.5 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-50"
+            >
+              {analyzing ? "Analyzing…" : game.analyzed ? "Re-analyze" : "Analyze"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -536,8 +578,8 @@ export default function GameReview({ id }: { id: string }) {
       )}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 space-y-4">
-          <div className="flex items-stretch gap-3">
+        <div className="flex min-w-0 flex-col gap-4">
+          <div className="order-1 flex items-stretch gap-3">
             {whiteEval != null && <EvalBar cp={whiteEval} />}
             <div className="min-w-0 flex-1" style={{ maxWidth: "min(520px, 66vh)" }}>
               <ChessBoard
@@ -550,7 +592,7 @@ export default function GameReview({ id }: { id: string }) {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="order-3 flex flex-wrap items-center gap-2 lg:order-2">
             <div className="flex items-center gap-1" role="group" aria-label="Move navigation">
               <button
                 type="button"
@@ -593,7 +635,7 @@ export default function GameReview({ id }: { id: string }) {
             >
               <IconFlip /> Flip
             </button>
-            <p className="text-xs text-zinc-400">
+            <p className="hidden text-xs text-zinc-400 lg:block">
               <kbd className="rounded bg-zinc-800 px-1">←</kbd>{" "}
               <kbd className="rounded bg-zinc-800 px-1">→</kbd> moves ·{" "}
               <kbd className="rounded bg-zinc-800 px-1">shift</kbd> + arrows jumps mistakes ·{" "}
@@ -603,11 +645,11 @@ export default function GameReview({ id }: { id: string }) {
 
           {/* The verdict: what you played vs what the engine wanted. */}
           {current ? (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="order-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 lg:order-3">
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="font-semibold text-zinc-100">{moveLabel(current.ply)}</span>
                 <span className="text-zinc-400">{playedIsMine ? "your move" : "their move"}</span>
-                <ClassBadge classification={current.classification} />
+                <ClassBadge classification={current.classification} showGlyph={false} />
                 {current.centipawn_loss != null && isError(current.classification) ? (
                   <Chip className="border-zinc-700 bg-zinc-950 font-mono text-zinc-200">
                     {MINUS}
@@ -631,6 +673,7 @@ export default function GameReview({ id }: { id: string }) {
                 <span className="text-zinc-400">{playedIsMine ? "You played " : "They played "}</span>
                 <span className="font-semibold" style={{ color: classColor(current.classification) }}>
                   {current.san ?? "—"}
+                  {classGlyph(current.classification)}
                 </span>
                 {current.best_move_san && current.best_move_san !== current.san ? (
                   <>
@@ -663,6 +706,16 @@ export default function GameReview({ id }: { id: string }) {
                 </p>
               )}
 
+              {reassurance.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {reassurance.map((line) => (
+                    <li key={line} className="text-sm text-zinc-300">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
               {current.key_lesson ? (
                 <p className="mt-2 text-sm text-emerald-300">
                   <span className="font-semibold">Lesson:</span> {current.key_lesson}
@@ -675,7 +728,7 @@ export default function GameReview({ id }: { id: string }) {
                   <span className="text-sm text-zinc-200">{current.drill_suggestion}</span>
                   <Link
                     href="/puzzles"
-                    className="ml-auto rounded bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+                    className="ml-auto rounded border border-indigo-500/60 px-2.5 py-1 text-xs font-semibold text-indigo-300 hover:bg-indigo-950/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
                   >
                     Train this
                   </Link>
@@ -709,7 +762,7 @@ export default function GameReview({ id }: { id: string }) {
               </div>
             </div>
           ) : (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="order-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 lg:order-3">
               <h2 className="text-sm font-semibold text-zinc-100">
                 {game.analyzed ? "Where to start" : "Not analysed yet"}
               </h2>
@@ -725,14 +778,28 @@ export default function GameReview({ id }: { id: string }) {
                     <span className="font-semibold text-indigo-300">
                       {game.accuracy != null ? `${game.accuracy.toFixed(1)}%` : "—"}
                     </span>
-                    {" · "}
-                    {summary.counts.mistake} mistake{summary.counts.mistake === 1 ? "" : "s"},{" "}
-                    {summary.counts.blunder} blunder{summary.counts.blunder === 1 ? "" : "s"},{" "}
-                    {summary.counts.miss} missed win{summary.counts.miss === 1 ? "" : "s"}
+                    {" · you matched the engine's move "}
+                    {summary.hits.best + summary.hits.brilliant} time
+                    {summary.hits.best + summary.hits.brilliant === 1 ? "" : "s"}
+                    {summary.hits.brilliant > 0
+                      ? `, ${summary.hits.brilliant} of them brillian${
+                          summary.hits.brilliant === 1 ? "cy" : "cies"
+                        }`
+                      : ""}
+                    .
+                  </p>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    Worth a look: {summary.counts.mistake} mistake{summary.counts.mistake === 1 ? "" : "s"},{" "}
+                    {summary.counts.blunder} blunder{summary.counts.blunder === 1 ? "" : "s"}
+                    {summary.counts.miss > 0
+                      ? `, and ${summary.counts.miss} winning chance${
+                          summary.counts.miss === 1 ? "" : "s"
+                        } left on the table`
+                      : ""}
                     {theirCritical.length > 0
                       ? ` · they gave you ${theirCritical.length} chance${
                           theirCritical.length === 1 ? "" : "s"
-                        }`
+                        } to punish`
                       : ""}
                     .
                   </p>
@@ -773,7 +840,7 @@ export default function GameReview({ id }: { id: string }) {
             </div>
           )}
 
-          <div>
+          <div className="order-4">
             <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
                 Your evaluation

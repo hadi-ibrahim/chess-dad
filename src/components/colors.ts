@@ -34,13 +34,16 @@ export const CLASS_LABELS: Record<string, string> = {
  * Standard chess annotation marks, so classification never rests on colour
  * alone. Neutral moves carry no glyph: only the errors (and a brilliancy) earn
  * one, which is what a player scans a score sheet for.
+ *
+ * `miss` is `!?` rather than a cross: a cross reads as capture notation next to
+ * SAN (the badge on e5 after `Re5` looked like "capture on e5").
  */
 export const CLASS_GLYPHS: Record<string, string> = {
   brilliant: "!!",
   inaccuracy: "?!",
   mistake: "?",
   blunder: "??",
-  miss: "\u00d7",
+  miss: "!?",
 };
 
 /** One-line definitions for the legend, matching okf/concepts/move-classification.md. */
