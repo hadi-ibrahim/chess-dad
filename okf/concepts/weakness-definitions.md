@@ -38,6 +38,10 @@ category aggregated over every analyzed game.
 * **Time management** — median and (clamped) average centipawn loss on moves played with under 30
   seconds left on the clock, compared with moves played at 30 seconds or more
   (a direct comparison, not a statistical correlation).
+* **Scope** — `GET /api/insights?window=` accepts `30`, `100`, `month` or `all`;
+  every aggregate above is computed over that window, so "am I improving?" is
+  answerable rather than only all-time totals. The window's game count is the
+  denominator for per-game figures.
 * **Opening performance** — win/draw/loss, win rate, and average game accuracy
   by ECO code, capped at the 30 most-played openings.
 * **Color-specific** — games, wins, draws, and losses as White versus Black.
