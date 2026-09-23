@@ -44,5 +44,13 @@ repetition count, and `due_at` is the current time plus the new interval. The
 puzzles view shows each card's solved/failed counts alongside its repetitions,
 interval, and ease state.
 
+# What counts as a success
+
+Only an **unassisted** solve is recorded as a success. A drill finished after a
+hint, after a wrong attempt, or through **Show solution** is posted as a failure,
+so its interval shortens and the position returns sooner; the
+[puzzles screen](puzzles-screen.md) words this as "with a hint — this drill comes
+back sooner" rather than as a mistake. Nothing else about the schedule changes.
+
 [^sm2]: The schedule is a simplified form of the SM-2 algorithm, adapted for
   chess positions rather than flashcards.
