@@ -11,6 +11,13 @@ export interface PuzzleWithContext extends PuzzleRow {
   /** Coach's note on the mistake this puzzle came from, when one was written. */
   explanation: string | null;
   key_lesson: string | null;
+  /** Context of the source position: what was played, how bad it was, whose move it was. */
+  source_classification: string | null;
+  source_centipawn_loss: number | null;
+  source_ply: number | null;
+  source_san: string | null;
+  /** The opponent's move immediately before the puzzle position. */
+  prev_san: string | null;
 }
 
 /** All puzzles, newest first, with game context and the source position's coaching. */
@@ -19,10 +26,14 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
   const rows = db
     .prepare(
       `SELECT p.*, g.white, g.black, g.opponent, g.result, g.opening_name,
-              pos.explanation AS source_explanation, pos.key_lesson AS source_key_lesson
+              pos.explanation AS source_explanation, pos.key_lesson AS source_key_lesson,
+              pos.classification AS source_classification, pos.centipawn_loss AS source_cpl,
+              pos.ply AS source_ply, pos.san AS source_san,
+              prev.san AS prev_san
        FROM puzzles p
        JOIN games g ON g.id = p.game_id
        LEFT JOIN positions pos ON pos.id = p.position_id
+       LEFT JOIN positions prev ON prev.game_id = pos.game_id AND prev.ply = pos.ply - 1
        ORDER BY p.id DESC`
     )
     .all() as Record<string, unknown>[];
@@ -47,8 +58,15 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
     opponent: String(r.opponent ?? ""),
     result: String(r.result ?? "*"),
     opening: String(r.opening_name ?? ""),
-    explanation: r.source_explanation == null ? null : String(r.source_explanation),
-    key_lesson: r.source_key_lesson == null ? null : String(r.source_key_lesson),
+    // Lesson text comes from multi-line OKF prose; collapse it so a literal
+    // newline never lands mid-sentence in the UI.
+    explanation: r.source_explanation == null ? null : String(r.source_explanation).replace(/\s+/g, " ").trim(),
+    key_lesson: r.source_key_lesson == null ? null : String(r.source_key_lesson).replace(/\s+/g, " ").trim(),
+    source_classification: r.source_classification == null ? null : String(r.source_classification),
+    source_centipawn_loss: r.source_cpl == null ? null : Number(r.source_cpl),
+    source_ply: r.source_ply == null ? null : Number(r.source_ply),
+    source_san: r.source_san == null ? null : String(r.source_san),
+    prev_san: r.prev_san == null ? null : String(r.prev_san),
   }));
 }
 

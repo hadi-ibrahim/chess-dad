@@ -34,6 +34,8 @@ export default function ChessBoard({
   marks = {},
   interactive = false,
   onDrop,
+  onSquareSelect,
+  allowDrawingArrows,
 }: {
   fen: string;
   orientation?: "white" | "black";
@@ -43,8 +45,16 @@ export default function ChessBoard({
   marks?: Record<string, BoardMark>;
   interactive?: boolean;
   onDrop?: (sourceSquare: string, targetSquare: string) => boolean;
+  /**
+   * Click/Enter-to-move. When provided, every square becomes a real button so the
+   * board is playable without dragging (touch and keyboard alike).
+   */
+  onSquareSelect?: (square: string) => void;
+  /** Defaults to !interactive, which let players annotate exactly when the board locks. */
+  allowDrawingArrows?: boolean;
 }) {
   const markedSquares = Object.keys(marks);
+  const selectable = typeof onSquareSelect === "function";
 
   const options: ChessboardOptions = {
     position: fen,
@@ -56,7 +66,7 @@ export default function ChessBoard({
     arrowOptions: { ...defaultArrowOptions, arrowStartOffset: 0.24, opacity: 0.72 },
     showNotation: true,
     allowDragging: interactive,
-    allowDrawingArrows: !interactive,
+    allowDrawingArrows: allowDrawingArrows ?? !interactive,
     boardStyle: {
       ...defaultBoardStyle(8),
       // The library sized rows from the board box but columns from 1fr tracks,
@@ -87,9 +97,31 @@ export default function ChessBoard({
     lightSquareNotationStyle: { ...defaultLightSquareNotationStyle, color: "#5B4636" },
   };
 
-  if (markedSquares.length > 0) {
-    const renderSquare: SquareRenderer = ({ square, children }) => (
-      <div style={{ position: "relative", width: "100%", height: "100%", ...squareStyles[square] }}>
+  if (selectable) {
+    options.onSquareClick = ({ square }) => onSquareSelect?.(square);
+  }
+
+  if (markedSquares.length > 0 || selectable) {
+    const renderSquare: SquareRenderer = ({ piece, square, children }) => (
+      <div
+        style={{ position: "relative", width: "100%", height: "100%", ...squareStyles[square] }}
+        tabIndex={selectable ? 0 : undefined}
+        role={selectable ? "button" : undefined}
+        aria-label={selectable ? `Square ${square}, ${piece ? piece.pieceType : "empty"}` : undefined}
+        onKeyDown={
+          selectable
+            ? (e) => {
+                // Only act when the square itself has focus; a focused piece
+                // inside it belongs to the drag-and-drop keyboard sensor.
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSquareSelect?.(square);
+                }
+              }
+            : undefined
+        }
+      >
         {children}
         {marks[square] ? (
           <span
