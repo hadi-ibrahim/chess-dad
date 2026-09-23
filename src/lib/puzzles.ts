@@ -8,15 +8,21 @@ export interface PuzzleWithContext extends PuzzleRow {
   opponent: string;
   result: string;
   opening: string;
+  /** Coach's note on the mistake this puzzle came from, when one was written. */
+  explanation: string | null;
+  key_lesson: string | null;
 }
 
-/** All puzzles, newest first, with game context for display. */
+/** All puzzles, newest first, with game context and the source position's coaching. */
 export function listPuzzlesWithContext(): PuzzleWithContext[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT p.*, g.white, g.black, g.opponent, g.result, g.opening_name
-       FROM puzzles p JOIN games g ON g.id = p.game_id
+      `SELECT p.*, g.white, g.black, g.opponent, g.result, g.opening_name,
+              pos.explanation AS source_explanation, pos.key_lesson AS source_key_lesson
+       FROM puzzles p
+       JOIN games g ON g.id = p.game_id
+       LEFT JOIN positions pos ON pos.id = p.position_id
        ORDER BY p.id DESC`
     )
     .all() as Record<string, unknown>[];
@@ -41,6 +47,8 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
     opponent: String(r.opponent ?? ""),
     result: String(r.result ?? "*"),
     opening: String(r.opening_name ?? ""),
+    explanation: r.source_explanation == null ? null : String(r.source_explanation),
+    key_lesson: r.source_key_lesson == null ? null : String(r.source_key_lesson),
   }));
 }
 
