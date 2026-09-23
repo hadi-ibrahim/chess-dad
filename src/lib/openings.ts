@@ -1,4 +1,5 @@
 import "server-only";
+import { getDb, listOpeningReviews } from "./db";
 
 export interface Opening {
   eco: string;
@@ -41,6 +42,84 @@ export const OPENINGS: Opening[] = [
   { eco: "E20", name: "Nimzo-Indian Defense", uci: ["d2d4", "g8f6", "c2c4", "e7e6", "b1c3", "f8b4"], wikipedia: "https://en.wikipedia.org/wiki/Nimzo-Indian_Defence" },
   { eco: "E60", name: "King's Indian Defense", uci: ["d2d4", "g8f6", "c2c4", "g7g6", "b1c3", "f8g7", "e2e4", "d7d6"], wikipedia: "https://en.wikipedia.org/wiki/King%27s_Indian_Defence" },
 ];
+
+export interface OpeningRecord {
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  winRate: number;
+  avgAccuracy: number | null;
+  lastPlayed: string | null;
+}
+
+export interface OpeningEntry extends Opening {
+  /** The player's own results with this ECO code, when they have any. */
+  record: OpeningRecord | null;
+  review: {
+    ease: number;
+    intervalDays: number;
+    repetitions: number;
+    dueAt: string | null;
+    cleanCount: number;
+    missCount: number;
+    lastReviewedAt: string | null;
+  } | null;
+  due: boolean;
+}
+
+/** The theory set joined with the player's results and review schedule. */
+export function getOpeningEntries(): OpeningEntry[] {
+  const db = getDb();
+  const records = new Map<string, OpeningRecord>();
+  const rows = db
+    .prepare(
+      `SELECT eco, COUNT(*) games,
+              SUM(CASE WHEN (player_color = 'w' AND result = '1-0') OR (player_color = 'b' AND result = '0-1') THEN 1 ELSE 0 END) wins,
+              SUM(CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END) draws,
+              SUM(CASE WHEN (player_color = 'w' AND result = '0-1') OR (player_color = 'b' AND result = '1-0') THEN 1 ELSE 0 END) losses,
+              AVG(accuracy) avgAccuracy, MAX(played_at) lastPlayed
+       FROM games WHERE eco IS NOT NULL AND eco <> '' AND analyzed = 1 GROUP BY eco`
+    )
+    .all() as Record<string, unknown>[];
+  for (const r of rows) {
+    const games = Number(r.games ?? 0);
+    records.set(String(r.eco), {
+      games,
+      wins: Number(r.wins ?? 0),
+      draws: Number(r.draws ?? 0),
+      losses: Number(r.losses ?? 0),
+      winRate: games ? Number((((Number(r.wins ?? 0) + Number(r.draws ?? 0) / 2) / games) * 100).toFixed(1)) : 0,
+      avgAccuracy: r.avgAccuracy == null ? null : Number(r.avgAccuracy),
+      lastPlayed: r.lastPlayed == null ? null : String(r.lastPlayed),
+    });
+  }
+
+  const reviews = new Map(listOpeningReviews().map((r) => [r.eco, r]));
+  const now = Date.now();
+  return OPENINGS.map((o) => {
+    const review = reviews.get(o.eco);
+    const record = records.get(o.eco) ?? null;
+    return {
+      ...o,
+      record,
+      review: review
+        ? {
+            ease: review.ease,
+            intervalDays: review.interval_days,
+            repetitions: review.repetitions,
+            dueAt: review.due_at,
+            cleanCount: review.clean_count,
+            missCount: review.miss_count,
+            lastReviewedAt: review.last_reviewed_at,
+          }
+        : null,
+      // "Due" only means something for a line you actually play: an opening you
+      // have never had on the board is not overdue.
+      due: Boolean(record) && (!review?.due_at || new Date(review.due_at).getTime() <= now),
+    };
+  });
+}
 
 export function getOpenings(): Opening[] {
   return OPENINGS;

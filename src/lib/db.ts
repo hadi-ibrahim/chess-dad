@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS puzzles (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS opening_reviews (
+  eco TEXT PRIMARY KEY,
+  ease REAL NOT NULL DEFAULT 2.5,
+  interval_days REAL NOT NULL DEFAULT 0,
+  repetitions INTEGER NOT NULL DEFAULT 0,
+  due_at TEXT,
+  clean_count INTEGER NOT NULL DEFAULT 0,
+  miss_count INTEGER NOT NULL DEFAULT 0,
+  last_reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS llm_cache (
   fen TEXT PRIMARY KEY,
   explanation TEXT,
@@ -643,6 +655,47 @@ export function updatePuzzleSrs(
          solved_count = solved_count + ?, fail_count = fail_count + ? WHERE id = ?`
     )
     .run(ease, intervalDays, repetitions, dueAt, solved ? 1 : 0, solved ? 0 : 1, id);
+}
+
+// ---------- Opening reviews ----------
+
+export interface OpeningReviewRow {
+  eco: string;
+  ease: number;
+  interval_days: number;
+  repetitions: number;
+  due_at: string | null;
+  clean_count: number;
+  miss_count: number;
+  last_reviewed_at: string | null;
+}
+
+export function listOpeningReviews(): OpeningReviewRow[] {
+  return getDb().prepare("SELECT * FROM opening_reviews").all() as unknown as OpeningReviewRow[];
+}
+
+export function updateOpeningReview(
+  eco: string,
+  ease: number,
+  intervalDays: number,
+  repetitions: number,
+  dueAt: string,
+  clean: boolean
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO opening_reviews (eco, ease, interval_days, repetitions, due_at, clean_count, miss_count, last_reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(eco) DO UPDATE SET
+         ease = excluded.ease,
+         interval_days = excluded.interval_days,
+         repetitions = excluded.repetitions,
+         due_at = excluded.due_at,
+         clean_count = opening_reviews.clean_count + excluded.clean_count,
+         miss_count = opening_reviews.miss_count + excluded.miss_count,
+         last_reviewed_at = datetime('now')`
+    )
+    .run(eco, ease, intervalDays, repetitions, dueAt, clean ? 1 : 0, clean ? 0 : 1);
 }
 
 // ---------- Profiles ----------

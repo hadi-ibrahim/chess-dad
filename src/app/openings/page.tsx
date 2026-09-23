@@ -6,12 +6,34 @@ import Link from "next/link";
 import { Chess, type Square } from "chess.js";
 import ChessBoard from "@/components/ChessBoard";
 
+interface OpeningRecord {
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  winRate: number;
+  avgAccuracy: number | null;
+  lastPlayed: string | null;
+}
+
+interface OpeningReviewState {
+  ease: number;
+  intervalDays: number;
+  repetitions: number;
+  dueAt: string | null;
+  cleanCount: number;
+  missCount: number;
+}
+
 interface Opening {
   eco: string;
   name: string;
   uci: string[];
   wikipedia: string;
   ideas?: string;
+  record: OpeningRecord | null;
+  review: OpeningReviewState | null;
+  due: boolean;
 }
 
 type Deviation = { played: string; expected: string; expectedUci: string; to: string };
@@ -38,6 +60,8 @@ export default function Openings() {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [scope, setScope] = useState<"repertoire" | "due" | "all">("repertoire");
+  const [recorded, setRecorded] = useState(false);
 
   const lineChess = useRef(new Chess());
 
@@ -46,6 +70,40 @@ export default function Openings() {
       .then((r) => r.json())
       .then((d) => setOpenings((d.openings as Opening[]) || []))
       .catch(() => setNotice("Could not load the opening set."));
+  }, []);
+
+  const recordReview = useCallback((eco: string, clean: boolean) => {
+    void fetch("/api/openings/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eco, clean }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((srs: { intervalDays?: number; dueAt?: string } | null) => {
+        if (!srs) return;
+        setRecorded(true);
+        setOpenings((prev) =>
+          prev.map((o) =>
+            o.eco === eco
+              ? {
+                  ...o,
+                  due: false,
+                  review: {
+                    ease: o.review?.ease ?? 2.5,
+                    repetitions: o.review?.repetitions ?? 0,
+                    cleanCount: (o.review?.cleanCount ?? 0) + (clean ? 1 : 0),
+                    missCount: (o.review?.missCount ?? 0) + (clean ? 0 : 1),
+                    intervalDays: srs.intervalDays ?? 0,
+                    dueAt: srs.dueAt ?? null,
+                  },
+                }
+              : o
+          )
+        );
+      })
+      .catch(() => {
+        /* the practice still counts locally; only the schedule stays stale */
+      });
   }, []);
 
   const sanOf = useCallback((opening: Opening, index: number): string => {
@@ -114,6 +172,7 @@ export default function Openings() {
       setSelectedSquare(null);
       setHintStage(0);
       setLineComplete(false);
+      setRecorded(false);
     },
     []
   );
@@ -163,7 +222,10 @@ export default function Openings() {
     setFen(chess.fen());
     setHintStage(0);
     setSelectedSquare(null);
-    if (next.length >= opening.uci.length) setLineComplete(true);
+    if (next.length >= opening.uci.length) {
+      setLineComplete(true);
+      recordReview(opening.eco, true);
+    }
   }
 
   function attemptMove(from: string, to: string): boolean {
@@ -194,6 +256,7 @@ export default function Openings() {
         expectedUci: expected,
         to: move.to ?? to,
       });
+      if (!recorded) recordReview(selected.eco, false);
       setFen(chess.fen());
       return true;
     }
@@ -232,13 +295,30 @@ export default function Openings() {
     rebuild(selected, keep, practiceColor);
   }
 
+  const repertoireCount = useMemo(() => openings.filter((o) => o.record).length, [openings]);
+  const dueCount = useMemo(() => openings.filter((o) => o.due).length, [openings]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return openings;
-    return openings.filter(
-      (o) => o.name.toLowerCase().includes(q) || o.eco.toLowerCase().includes(q)
-    );
-  }, [openings, search]);
+    const searched = q
+      ? openings.filter((o) => o.name.toLowerCase().includes(q) || o.eco.toLowerCase().includes(q))
+      : openings;
+    const scoped = searched.filter((o) => {
+      if (scope === "repertoire") return Boolean(o.record);
+      if (scope === "due") return o.due;
+      return true;
+    });
+    // Your own openings first, most played first; then anything due; then A-Z.
+    return [...scoped].sort((a, b) => {
+      const aRep = a.record ? 0 : 1;
+      const bRep = b.record ? 0 : 1;
+      if (aRep !== bRep) return aRep - bRep;
+      const games = (b.record?.games ?? 0) - (a.record?.games ?? 0);
+      if (games !== 0) return games;
+      if (a.due !== b.due) return a.due ? -1 : 1;
+      return a.eco.localeCompare(b.eco);
+    });
+  }, [openings, search, scope]);
 
   function nextOpening() {
     if (!selected) return;
@@ -294,9 +374,30 @@ export default function Openings() {
       <div>
         <h1 className="text-2xl font-bold">Opening trainer</h1>
         <p className="text-sm text-zinc-400">
-          {openings.length} main lines, one per opening. Step through a line, or practise it as either
-          colour and find out where your memory stops.
+          {openings.length} main lines, one per opening. You have played {repertoireCount} of them —{" "}
+          {dueCount} due for review.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Opening scope">
+          {([
+            { key: "repertoire" as const, label: `Your repertoire (${repertoireCount})` },
+            { key: "due" as const, label: `Due (${dueCount})` },
+            { key: "all" as const, label: `All (${openings.length})` },
+          ]).map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setScope(s.key)}
+              aria-pressed={scope === s.key}
+              className={`min-h-11 rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${
+                scope === s.key
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {notice ? (
@@ -317,6 +418,21 @@ export default function Openings() {
                     ? `practising as ${practiceColor === "w" ? "White" : "Black"}`
                     : `${selected.uci.length} plies`}
                 </span>
+                {selected.record ? (
+                  <span className="text-sm text-zinc-400">
+                    you: {selected.record.games} games · {selected.record.winRate}% score
+                    {selected.record.avgAccuracy != null
+                      ? ` · ${selected.record.avgAccuracy.toFixed(1)}% acc`
+                      : ""}
+                  </span>
+                ) : (
+                  <span className="text-sm text-zinc-400">not in your games yet</span>
+                )}
+                {selected.review?.dueAt ? (
+                  <span className="text-xs text-zinc-400">
+                    next review {new Date(selected.review.dueAt).toLocaleDateString()}
+                  </span>
+                ) : null}
                 <span aria-live="polite" className="ml-auto font-mono text-sm text-zinc-300">
                   {practicing ? `${Math.min(playedUci.length, selected.uci.length)} / ${selected.uci.length}` : `${step} / ${selected.uci.length}`}
                 </span>
@@ -580,7 +696,21 @@ export default function Openings() {
                     <span className="truncate font-medium text-zinc-100">{o.name}</span>
                     <span className="shrink-0 font-mono text-xs text-zinc-400">{o.eco}</span>
                   </div>
-                  <div className="text-xs text-zinc-400">{o.uci.length} plies</div>
+                  <div className="flex flex-wrap items-center gap-x-2 text-xs text-zinc-400">
+                    <span>{o.uci.length} plies</span>
+                    {o.record ? (
+                      <span>
+                        {o.record.games} games · {o.record.winRate}%
+                      </span>
+                    ) : (
+                      <span>not in your games</span>
+                    )}
+                    {o.due ? (
+                      <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
+                        due
+                      </span>
+                    ) : null}
+                  </div>
                 </button>
               );
             })}

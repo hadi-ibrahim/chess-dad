@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { getOpenings, findOpening, detectDeviation } from "@/lib/openings";
+import { getOpeningEntries, findOpening, detectDeviation } from "@/lib/openings";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ openings: getOpenings() });
+  return NextResponse.json({ openings: getOpeningEntries() });
 }
 
 export async function POST(request: Request) {
