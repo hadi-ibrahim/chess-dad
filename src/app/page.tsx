@@ -35,8 +35,21 @@ interface Game {
 const SPEEDS = ["bullet", "blitz", "rapid", "classical"];
 const PAGE_SIZES = [25, 50, 100, 200];
 
+function resultOf(g: Game): { label: string; tone: string } {
+  const won =
+    (g.player_color === "w" && g.result.startsWith("1-0")) ||
+    (g.player_color === "b" && g.result.startsWith("0-1"));
+  const lost =
+    (g.player_color === "w" && g.result.startsWith("0-1")) ||
+    (g.player_color === "b" && g.result.startsWith("1-0"));
+  if (won) return { label: "Won", tone: "text-emerald-400" };
+  if (lost) return { label: "Lost", tone: "text-rose-400" };
+  if (/1\/2|½/.test(g.result)) return { label: "Drew", tone: "text-zinc-300" };
+  return { label: g.result, tone: "text-zinc-300" };
+}
+
 const field =
-  "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400";
+  "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950";
 
 export default function Home() {
   const [games, setGames] = useState<Game[]>([]);
@@ -237,12 +250,12 @@ export default function Home() {
           placeholder="Search players, openings, ECO…"
           className={`${field} min-w-[220px] flex-1`}
         />
-        <select value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }} className={field}>
+        <select aria-label="Site" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }} className={field}>
           <option value="">Any site</option>
           <option value="lichess">Lichess</option>
           <option value="chesscom">Chess.com</option>
         </select>
-        <select value={speed} onChange={(e) => { setSpeed(e.target.value); setPage(1); }} className={field}>
+        <select aria-label="Speed" value={speed} onChange={(e) => { setSpeed(e.target.value); setPage(1); }} className={field}>
           <option value="">Any speed</option>
           {SPEEDS.map((s) => (
             <option key={s} value={s}>
@@ -250,13 +263,13 @@ export default function Home() {
             </option>
           ))}
         </select>
-        <select value={result} onChange={(e) => { setResult(e.target.value); setPage(1); }} className={field}>
+        <select aria-label="Result" value={result} onChange={(e) => { setResult(e.target.value); setPage(1); }} className={field}>
           <option value="">Any result</option>
           <option value="win">Wins</option>
           <option value="loss">Losses</option>
           <option value="draw">Draws</option>
         </select>
-        <select value={color} onChange={(e) => { setColor(e.target.value); setPage(1); }} className={field}>
+        <select aria-label="Colour played" value={color} onChange={(e) => { setColor(e.target.value); setPage(1); }} className={field}>
           <option value="">Either colour</option>
           <option value="w">As White</option>
           <option value="b">As Black</option>
@@ -264,6 +277,7 @@ export default function Home() {
         <select
           value={analyzedFilter}
           onChange={(e) => { setAnalyzedFilter(e.target.value); setPage(1); }}
+          aria-label="Analysis status"
           className={field}
         >
           <option value="">All games</option>
@@ -291,7 +305,7 @@ export default function Home() {
         )}
       </div>
 
-      <div className={`overflow-x-auto rounded-xl border border-zinc-800 ${loading ? "opacity-60" : ""}`}>
+      <div className={`hidden overflow-x-auto rounded-xl border border-zinc-800 sm:block ${loading ? "opacity-60" : ""}`}>
         <table className="w-full text-sm">
           <thead className="bg-zinc-900 text-left text-xs uppercase tracking-wider text-zinc-400">
             <tr>
@@ -320,29 +334,17 @@ export default function Home() {
                   <div className="font-medium">
                     {g.white} <span className="text-zinc-500">vs</span> {g.black}
                   </div>
-                  <div className="text-xs text-zinc-500">
+                  <div className="text-xs text-zinc-400">
                     you played {g.player_color === "w" ? "White" : "Black"} · {g.player_rating ?? "?"}
                     {g.played_at && ` · ${g.played_at.slice(0, 10)}`}
                   </div>
                 </td>
                 <td className="px-3 py-2">
                   {(() => {
-                    const won =
-                      (g.player_color === "w" && g.result.startsWith("1-0")) ||
-                      (g.player_color === "b" && g.result.startsWith("0-1"));
-                    const lost =
-                      (g.player_color === "w" && g.result.startsWith("0-1")) ||
-                      (g.player_color === "b" && g.result.startsWith("1-0"));
-                    const draw = /1\/2|½/.test(g.result);
-                    const label = won ? "Won" : lost ? "Lost" : draw ? "Drew" : g.result;
-                    const tone = won
-                      ? "text-emerald-400"
-                      : lost
-                        ? "text-rose-400"
-                        : "text-zinc-300";
+                    const r = resultOf(g);
                     return (
-                      <span className={`font-medium ${tone}`}>
-                        {label} <span className="font-mono text-xs text-zinc-400">{g.result}</span>
+                      <span className={`font-medium ${r.tone}`}>
+                        {r.label} <span className="font-mono text-xs text-zinc-400">{g.result}</span>
                       </span>
                     );
                   })()}
@@ -411,7 +413,7 @@ export default function Home() {
                     {!g.analyzed ? (
                       g.total_plies === 0 ? (
                         <span
-                          className="rounded bg-zinc-800 px-2.5 py-1 text-xs text-zinc-500"
+                          className="rounded bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300"
                           title="No move data — re-import this account to repair it"
                         >
                           no moves
@@ -448,6 +450,97 @@ export default function Home() {
         </table>
       </div>
 
+      {/* Nine columns cannot fit on a phone and Actions was the first thing cut, so
+          below sm each game is a card whose primary action is Review. */}
+      <ul className={`space-y-2 sm:hidden ${loading ? "opacity-60" : ""}`}>
+        {games.length === 0 ? (
+          <li className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-6 text-center text-sm text-zinc-400">
+            {filtersActive ? "No games match these filters." : "No games yet — import a profile above."}
+          </li>
+        ) : null}
+        {games.map((g) => {
+          const r = resultOf(g);
+          return (
+            <li key={g.id} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-sm font-medium text-zinc-100">
+                  {g.white} <span className="text-zinc-400">vs</span> {g.black}
+                </span>
+                <span className={`shrink-0 text-sm font-medium ${r.tone}`}>
+                  {r.label} <span className="font-mono text-xs text-zinc-400">{g.result}</span>
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-zinc-400">
+                you played {g.player_color === "w" ? "White" : "Black"} · {g.player_rating ?? "?"}
+                {g.played_at ? ` · ${g.played_at.slice(0, 10)}` : ""} · {g.speed || "—"}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                {g.eco ? (
+                  <Link
+                    href={`/openings?eco=${encodeURIComponent(g.eco)}`}
+                    className="font-mono text-zinc-400 underline-offset-2 hover:underline"
+                  >
+                    {g.eco}
+                  </Link>
+                ) : null}
+                <span className="truncate text-zinc-300">{g.opening_name || "—"}</span>
+                <span className="font-mono text-zinc-300">
+                  {g.analyzed && g.accuracy != null ? `${g.accuracy.toFixed(1)}%` : "not analysed"}
+                </span>
+                {g.analyzed && g.flagged != null ? (
+                  <span className="font-mono text-zinc-300">
+                    {g.flagged} flagged{g.blunders ? ` (${g.blunders} blunders)` : ""}
+                  </span>
+                ) : null}
+              </div>
+              {g.analyzed && g.decisive_ply != null ? (
+                <Link
+                  href={`/review/${g.id}?ply=${g.decisive_ply}`}
+                  className="mt-1 block text-xs text-zinc-200 underline-offset-2 hover:underline"
+                >
+                  turning point {Math.floor(g.decisive_ply / 2) + 1}
+                  {g.decisive_ply % 2 === 0 ? "." : "…"} {g.decisive_san}
+                  {g.decisive_cpl != null ? ` · −${(g.decisive_cpl / 100).toFixed(1)}` : ""}
+                </Link>
+              ) : null}
+              <div className="mt-2 flex items-center gap-2">
+                {g.analyzed ? (
+                  <Link
+                    href={`/review/${g.id}`}
+                    className="flex min-h-11 flex-1 items-center justify-center rounded-lg bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-500"
+                  >
+                    Review
+                  </Link>
+                ) : g.total_plies === 0 ? (
+                  <span className="flex min-h-11 flex-1 items-center justify-center rounded-lg bg-zinc-800 text-xs text-zinc-300">
+                    no moves — re-import to repair
+                  </span>
+                ) : queuedIds.has(g.id) ? (
+                  <span className="flex min-h-11 flex-1 items-center justify-center rounded-lg bg-indigo-950 text-xs text-indigo-300">
+                    queued
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => enqueue([g.id])}
+                    className="min-h-11 flex-1 rounded-lg bg-zinc-700 text-sm font-medium hover:bg-zinc-600"
+                  >
+                    Analyze
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => remove(g.id)}
+                  className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm text-zinc-300 hover:bg-rose-900/40 hover:text-rose-300"
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-400">
         <span>
           {total === 0 ? "Nothing to show" : `Showing ${rangeStart}–${rangeEnd} of ${total}`}
@@ -467,10 +560,20 @@ export default function Home() {
               </option>
             ))}
           </select>
-          <button onClick={pager.first} disabled={page <= 1} className="rounded bg-zinc-800 px-2.5 py-1.5 disabled:opacity-40">
+          <button
+            onClick={pager.first}
+            disabled={page <= 1}
+            aria-label="First page"
+            className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+          >
             «
           </button>
-          <button onClick={pager.prev} disabled={page <= 1} className="rounded bg-zinc-800 px-3 py-1.5 disabled:opacity-40">
+          <button
+            onClick={pager.prev}
+            disabled={page <= 1}
+            aria-label="Previous page"
+            className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+          >
             Prev
           </button>
           <span className="px-1 text-zinc-300">
@@ -479,14 +582,16 @@ export default function Home() {
           <button
             onClick={pager.next}
             disabled={page >= pageCount}
-            className="rounded bg-zinc-800 px-3 py-1.5 disabled:opacity-40"
+            aria-label="Next page"
+            className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
           >
             Next
           </button>
           <button
             onClick={pager.last}
             disabled={page >= pageCount}
-            className="rounded bg-zinc-800 px-2.5 py-1.5 disabled:opacity-40"
+            aria-label="Last page"
+            className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
           >
             »
           </button>

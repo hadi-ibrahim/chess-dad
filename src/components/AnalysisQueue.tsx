@@ -73,7 +73,7 @@ export default function AnalysisQueue({ onProgress }: { onProgress?: () => void 
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Job queue</h2>
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-zinc-400">
           {worker.concurrency} workers · {games.analyzed}/{analyzable} games analyzed
           {jobs.running > 0 && <span className="text-indigo-300"> · {jobs.running} running</span>}
         </span>
@@ -102,7 +102,7 @@ export default function AnalysisQueue({ onProgress }: { onProgress?: () => void 
       </div>
 
       {(importing.queued + importing.running > 0 || analyzing.queued + analyzing.running > 0) && (
-        <div className="mt-2 flex flex-wrap gap-x-5 text-xs text-zinc-500">
+        <div className="mt-2 flex flex-wrap gap-x-5 text-xs text-zinc-400">
           {importing.queued + importing.running > 0 && (
             <span>
               imports: <b className="text-zinc-300">{importing.running}</b> running /{" "}

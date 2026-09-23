@@ -147,8 +147,12 @@ export default function Openings() {
     if (openings.length === 0 || selected) return;
     const eco = new URLSearchParams(window.location.search).get("eco");
     const match = eco ? openings.find((o) => o.eco.toUpperCase() === eco.toUpperCase()) : null;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the deep link selects once the list arrives
-    if (match) selectOpening(match);
+    /* eslint-disable react-hooks/set-state-in-effect -- the deep link selects a line once the list arrives */
+    if (match) {
+      selectOpening(match);
+      setScope("all");
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on first load
   }, [openings.length]);
 
@@ -198,7 +202,7 @@ export default function Openings() {
 
   const turn = fen.split(" ")[1];
   const yourTurn = turn === practiceColor;
-  const interactive = practicing && !deviation && !lineComplete && yourTurn && !notice;
+  const interactive = practicing && !deviation && !lineComplete && yourTurn;
 
   const expectedUci = selected && practicing ? selected.uci[playedUci.length] ?? null : null;
   const expectedSan = expectedUci && selected ? sanOf(selected, playedUci.length) : null;
@@ -217,11 +221,15 @@ export default function Openings() {
       applied.push(reply);
     }
     const next = [...playedUci, ...applied];
+    // Accepting the line's move (or playing it via "Play it for me") resolves the
+    // deviation; leaving it set kept the old alert on screen over a moved board.
+    setDeviation(null);
     setPlayedUci(next);
     setStep(next.length);
     setFen(chess.fen());
     setHintStage(0);
     setSelectedSquare(null);
+    setNotice(null);
     if (next.length >= opening.uci.length) {
       setLineComplete(true);
       recordReview(opening.eco, true);
@@ -256,6 +264,7 @@ export default function Openings() {
         expectedUci: expected,
         to: move.to ?? to,
       });
+      setHintStage(0);
       if (!recorded) recordReview(selected.eco, false);
       setFen(chess.fen());
       return true;
@@ -281,7 +290,15 @@ export default function Openings() {
 
   function showMe() {
     if (!selected || !expectedUci) return;
-    const chess = lineChess.current;
+    // Rebuild the position from the line first: after a deviation the live
+    // position has the deviating move on the board and the wrong side to move,
+    // so the line's move is not legal there and this silently did nothing.
+    const chess = new Chess();
+    for (let i = 0; i < playedUci.length && i < selected.uci.length; i++) {
+      const { from, to, promotion } = uciParts(selected.uci[i]);
+      chess.move({ from, to, promotion });
+    }
+    lineChess.current = chess;
     const { from, to, promotion } = uciParts(expectedUci);
     const move = chess.move({ from, to, promotion });
     if (move) applyCorrect(selected, move.lan);
@@ -460,7 +477,7 @@ export default function Openings() {
                       onClick={() => stepTo(selected, 0)}
                       disabled={step === 0}
                       aria-label="Go to the starting position"
-                      className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
+                      className="min-h-11 min-w-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
                     >
                       ⏮
                     </button>
@@ -469,7 +486,7 @@ export default function Openings() {
                       onClick={() => stepTo(selected, step - 1)}
                       disabled={step === 0}
                       aria-label="Previous move"
-                      className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
+                      className="min-h-11 min-w-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
                     >
                       ◀
                     </button>
@@ -478,7 +495,7 @@ export default function Openings() {
                       onClick={() => stepTo(selected, step + 1)}
                       disabled={step >= selected.uci.length}
                       aria-label="Next move"
-                      className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
+                      className="min-h-11 min-w-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
                     >
                       ▶
                     </button>
@@ -487,7 +504,7 @@ export default function Openings() {
                       onClick={() => stepTo(selected, selected.uci.length)}
                       disabled={step >= selected.uci.length}
                       aria-label="Go to the end of the line"
-                      className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
+                      className="min-h-11 min-w-11 rounded-lg bg-zinc-800 px-3 text-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
                     >
                       ⏭
                     </button>

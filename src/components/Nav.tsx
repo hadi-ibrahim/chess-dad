@@ -32,7 +32,7 @@ export default function Nav() {
                 key={l.href}
                 href={l.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex min-h-10 items-center rounded-md px-2.5 font-medium transition-colors sm:px-3 ${
+                className={`flex min-h-11 items-center rounded-md px-2.5 font-medium transition-colors sm:px-3 ${
                   active ? "bg-zinc-800 text-white" : "text-zinc-300 hover:bg-zinc-800 hover:text-white"
                 }`}
               >
