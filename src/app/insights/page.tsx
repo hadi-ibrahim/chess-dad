@@ -15,6 +15,22 @@ import {
   LabelList,
 } from "recharts";
 
+import { CLASS_BLURBS, classColor, classGlyph } from "@/components/colors";
+
+interface BrilliantMove {
+  gameId: number;
+  ply: number;
+  moveNumber: number;
+  color: "w" | "b";
+  san: string;
+  phase: string | null;
+  motif: string | null;
+  opponent: string;
+  playedAt: string | null;
+  outcome: "win" | "draw" | "loss" | "unknown";
+  by: "me" | "them";
+}
+
 interface Profile {
   totalGames: number;
   analyzedGames: number;
@@ -45,6 +61,12 @@ interface Profile {
   };
   accuracyTrend: { gameId: number; playedAt: string | null; accuracy: number | null }[];
   summary: { avgAccuracy: number | null; blunderRate: number; mostCommonMotif: string | null; weakestPhase: string | null };
+  recentBrilliant: {
+    mine: BrilliantMove[];
+    theirs: BrilliantMove[];
+    mineTotal: number;
+    theirsTotal: number;
+  };
   window?: string;
 }
 
@@ -59,9 +81,32 @@ const WINDOWS: { key: ProfileWindow; label: string }[] = [
 
 type OpeningSort = "games" | "winRate" | "avgAccuracy";
 
+/** Whose brilliancies the section lists. */
+type BrilliantScope = "mine" | "theirs" | "both";
+
+const BRILLIANT_SCOPES: { key: BrilliantScope; label: string }[] = [
+  { key: "mine", label: "Mine" },
+  { key: "theirs", label: "Against me" },
+  { key: "both", label: "Both" },
+];
+
+/** How many rows the section shows at once. */
+const BRILLIANT_SHOWN = 6;
+
 /** Motif tags are detector keys; these are the same words the puzzles screen uses. */
 function motifLabel(motif: string): string {
   return motif.replace(/-/g, " ");
+}
+
+/**
+ * Brilliancies are a highlight reel, so a loss is stated plainly instead of being
+ * flagged in red — a result is context here, never a scolding.
+ */
+function outcomeChip(outcome: "win" | "draw" | "loss" | "unknown"): { label: string; className: string } {
+  if (outcome === "win") return { label: "won", className: "text-emerald-300" };
+  if (outcome === "draw") return { label: "drew", className: "text-zinc-300" };
+  if (outcome === "loss") return { label: "lost", className: "text-zinc-400" };
+  return { label: "", className: "text-zinc-500" };
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -82,6 +127,7 @@ export default function Insights() {
   const [profileWindow, setProfileWindow] = useState<ProfileWindow>("all");
   const [sortKey, setSortKey] = useState<OpeningSort>("games");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [brilliantScope, setBrilliantScope] = useState<BrilliantScope>("mine");
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +206,26 @@ export default function Insights() {
     () => (profile?.motifs ?? []).find((m) => m.motif === "tactical")?.count ?? 0,
     [profile]
   );
+
+  /**
+   * `mine` and `theirs` arrive as separate recency windows. Merging them keeps
+   * "Both" a single timeline rather than one side's block followed by the other's,
+   * and the cap keeps the section a highlight reel at any setting.
+   */
+  const brilliantList = useMemo(() => {
+    const rb = profile?.recentBrilliant;
+    if (!rb) return [];
+    const list =
+      brilliantScope === "mine" ? rb.mine : brilliantScope === "theirs" ? rb.theirs : [...rb.mine, ...rb.theirs];
+    return [...list]
+      .sort(
+        (a, b) =>
+          (b.playedAt ?? "").localeCompare(a.playedAt ?? "") ||
+          b.gameId - a.gameId ||
+          a.ply - b.ply
+      )
+      .slice(0, BRILLIANT_SHOWN);
+  }, [profile, brilliantScope]);
 
   if (error) {
     return (
@@ -308,6 +374,126 @@ export default function Insights() {
             times, {profile.classification.brilliant ?? 0} of them brilliancies.
           </li>
         </ul>
+      </section>
+
+      {/* The positive counterpart to the list above: proof of what already works,
+          each row jumping straight to that position on the board. */}
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-zinc-400">
+          Recent brilliance
+        </h2>
+        <p className="mb-3 text-xs text-zinc-400">
+          {CLASS_BLURBS.brilliant} —{" "}
+          {brilliantScope === "theirs" ? (
+            <>
+              your opponents played{" "}
+              <span className="font-semibold text-zinc-300">
+                {profile.recentBrilliant.theirsTotal.toLocaleString()}
+              </span>{" "}
+              against you {profileWindow === "all" ? "all time" : "in this window"}.
+            </>
+          ) : brilliantScope === "both" ? (
+            <>
+              <span className="font-semibold text-zinc-300">
+                {profile.recentBrilliant.mineTotal.toLocaleString()}
+              </span>{" "}
+              are yours and{" "}
+              <span className="font-semibold text-zinc-300">
+                {profile.recentBrilliant.theirsTotal.toLocaleString()}
+              </span>{" "}
+              went against you {profileWindow === "all" ? "all time" : "in this window"}.
+            </>
+          ) : (
+            <>
+              you have{" "}
+              <span className="font-semibold text-zinc-300">
+                {profile.recentBrilliant.mineTotal.toLocaleString()}
+              </span>{" "}
+              {profileWindow === "all" ? "all time" : "in this window"}
+              {brilliantList.length > 0 ? ", each one opening the board at that exact position." : "."}
+            </>
+          )}
+        </p>
+
+        <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Whose brilliancies">
+          <span className="text-xs uppercase tracking-wider text-zinc-400">Show</span>
+          {BRILLIANT_SCOPES.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setBrilliantScope(s.key)}
+              aria-pressed={brilliantScope === s.key}
+              className={`min-h-10 rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${
+                brilliantScope === s.key
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {brilliantList.length > 0 ? (
+          <ul className="divide-y divide-zinc-800">
+            {brilliantList.map((b) => {
+              const chip = outcomeChip(b.outcome);
+              return (
+                <li key={`${b.by}-${b.gameId}-${b.ply}`}>
+                  <Link
+                    href={`/review/${b.gameId}?ply=${b.ply}`}
+                    className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-2 py-2.5 transition-colors hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+                  >
+                    <span className="font-mono text-xs text-zinc-400">
+                      {b.moveNumber}
+                      {b.color === "w" ? "." : "\u2026"}
+                    </span>
+                    {/* Whose move it was. The piece's colour does not say, which is
+                        how your own brilliancy reads as one played against you. */}
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        b.by === "me" ? "bg-zinc-800 text-zinc-100" : "bg-zinc-800/50 text-zinc-400"
+                      }`}
+                    >
+                      {b.by === "me" ? "you" : "them"}
+                    </span>
+                    {/* The review screen's own brilliancy colour and `!!` glyph, so this reads
+                        as the same vocabulary and never leans on colour alone. */}
+                    <span
+                      className="font-mono text-base font-semibold"
+                      style={{ color: classColor("brilliant") }}
+                    >
+                      {b.san}
+                      {classGlyph("brilliant")}
+                    </span>
+                    {b.phase ? (
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-300">
+                        {b.phase}
+                      </span>
+                    ) : null}
+                    <span className="text-xs text-zinc-400">
+                      vs {b.opponent}
+                      {b.playedAt ? ` \u00b7 ${b.playedAt.slice(0, 10)}` : ""}
+                    </span>
+                    {chip.label ? (
+                      <span className={`ml-auto text-xs font-semibold ${chip.className}`}>
+                        {chip.label}
+                      </span>
+                    ) : null}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-400">
+            {brilliantScope === "mine"
+              ? "None of yours in this window yet — try a wider scope, or analyse a few more games."
+              : brilliantScope === "theirs"
+                ? "Your opponents have not played one against you in this window."
+                : "None in this window — try a wider scope."}
+          </p>
+        )}
       </section>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

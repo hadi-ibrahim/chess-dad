@@ -53,6 +53,24 @@ export interface OpeningStat {
   avgAccuracy: number;
 }
 
+/** A brilliancy with just enough context to place it, and whose move it was. */
+export interface BrilliantMove {
+  gameId: number;
+  ply: number;
+  /** Move number as a player counts it: ply 32 and 33 are both move 17. */
+  moveNumber: number;
+  /** The side the player had. Ply parity always agrees with it. */
+  color: "w" | "b";
+  san: string;
+  phase: string | null;
+  motif: string | null;
+  opponent: string;
+  playedAt: string | null;
+  outcome: "win" | "draw" | "loss" | "unknown";
+  /** `me` when the player played it, `them` when the opponent did. */
+  by: "me" | "them";
+}
+
 export interface WeaknessProfile {
   totalGames: number;
   analyzedGames: number;
@@ -65,6 +83,13 @@ export interface WeaknessProfile {
     normalTime: { moves: number; avgCpLoss: number; medianCpLoss: number };
   };
   openings: OpeningStat[];
+  /** Recent brilliancies on both sides, so the dashboard can toggle between them. */
+  recentBrilliant: {
+    mine: BrilliantMove[];
+    theirs: BrilliantMove[];
+    mineTotal: number;
+    theirsTotal: number;
+  };
   color: {
     white: { games: number; wins: number; draws: number; losses: number };
     black: { games: number; wins: number; draws: number; losses: number };
@@ -104,6 +129,7 @@ function emptyProfile(totalGames: number, analyzedGames: number): WeaknessProfil
       normalTime: { moves: 0, avgCpLoss: 0, medianCpLoss: 0 },
     },
     openings: [],
+    recentBrilliant: { mine: [], theirs: [], mineTotal: 0, theirsTotal: 0 },
     color: {
       white: { games: 0, wins: 0, draws: 0, losses: 0 },
       black: { games: 0, wins: 0, draws: 0, losses: 0 },
@@ -128,6 +154,27 @@ interface Row {
   accuracy: number | null;
   played_at: string | null;
   game_id: number;
+}
+
+/** How many brilliancies the insights page lists per side. */
+const BRILLIANT_LIMIT = 6;
+/** How many recent brilliancies to scan before splitting them by side, so one
+ *  side's recent run cannot crowd the other out of the list entirely. */
+const BRILLIANT_SCAN = 60;
+
+interface BrilliantRow {
+  game_id: number;
+  ply: number;
+  san: string | null;
+  color: string;
+  phase: string | null;
+  motif: string | null;
+  player_color: string;
+  white: string;
+  black: string;
+  opponent: string | null;
+  result: string;
+  played_at: string | null;
 }
 
 export type ProfileWindow = "all" | "30" | "100" | "month";
@@ -349,6 +396,72 @@ export function computeWeaknesses(window: ProfileWindow = "all"): WeaknessProfil
     blunderRate: analyzedGames ? profile.classification.blunder / analyzedGames : 0,
     mostCommonMotif: profile.motifs[0]?.motif ?? null,
     weakestPhase: weakest?.[0] ?? null,
+  };
+
+  // Brilliancies are recorded for both sides, so each row is tagged `me`/`them`
+  // and the dashboard decides what to show. Both sides are fetched in one pass and
+  // split here, so each keeps its own recency instead of one crowding out the other.
+  const brilliantRows = db
+    .prepare(
+      `SELECT p.game_id, p.ply, p.san, p.color, p.phase, p.motif,
+              g.player_color, g.white, g.black, g.opponent, g.result, g.played_at
+       FROM positions p JOIN games g ON g.id = p.game_id
+       WHERE p.classification = 'brilliant' AND g.analyzed = 1${
+         scopeIds ? ` AND g.id IN (${scopeIds.map(() => "?").join(",")})` : ""
+       }
+       ORDER BY g.played_at DESC, p.game_id DESC, p.ply ASC
+       LIMIT ?`
+    )
+    .all(...(scopeIds ?? []), BRILLIANT_SCAN) as unknown as BrilliantRow[];
+
+  const toBrilliantMove = (r: BrilliantRow): BrilliantMove => {
+    const color: "w" | "b" = r.player_color === "b" ? "b" : "w";
+    const result = String(r.result ?? "*");
+    const won = (color === "w" && result === "1-0") || (color === "b" && result === "0-1");
+    const lost = (color === "w" && result === "0-1") || (color === "b" && result === "1-0");
+    const ply = Number(r.ply);
+    return {
+      gameId: Number(r.game_id),
+      ply,
+      moveNumber: Math.floor(ply / 2) + 1,
+      color,
+      san: r.san ?? "",
+      phase: r.phase,
+      motif: r.motif,
+      opponent: r.opponent ?? (color === "w" ? r.black : r.white),
+      playedAt: r.played_at,
+      outcome: won ? "win" : lost ? "loss" : result === "1/2-1/2" ? "draw" : "unknown",
+      by: r.color === r.player_color ? "me" : "them",
+    };
+  };
+
+  const mine: BrilliantMove[] = [];
+  const theirs: BrilliantMove[] = [];
+  for (const r of brilliantRows) {
+    const move = toBrilliantMove(r);
+    if (move.by === "me") {
+      if (mine.length < BRILLIANT_LIMIT) mine.push(move);
+    } else if (theirs.length < BRILLIANT_LIMIT) {
+      theirs.push(move);
+    }
+  }
+
+  const brilliantCounts = db
+    .prepare(
+      `SELECT SUM(p.color = g.player_color) AS mine,
+              SUM(p.color <> g.player_color) AS theirs
+       FROM positions p JOIN games g ON g.id = p.game_id
+       WHERE p.classification = 'brilliant' AND g.analyzed = 1${
+         scopeIds ? ` AND g.id IN (${scopeIds.map(() => "?").join(",")})` : ""
+       }`
+    )
+    .get(...(scopeIds ?? [])) as { mine: number | null; theirs: number | null };
+
+  profile.recentBrilliant = {
+    mine,
+    theirs,
+    mineTotal: Number(brilliantCounts?.mine ?? 0),
+    theirsTotal: Number(brilliantCounts?.theirs ?? 0),
   };
 
   return profile;
