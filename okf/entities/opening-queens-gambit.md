@@ -5,7 +5,7 @@ description: The classical 1.d4 d5 2.c4 — offering a flank pawn for central co
 resource: https://en.wikipedia.org/wiki/Queen%27s_Gambit
 tags: [opening, white, d4, queens-gambit]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 sources:
   - id: wiki-qg
     resource: https://en.wikipedia.org/wiki/Queen%27s_Gambit

@@ -5,7 +5,7 @@ description: The Spanish Opening — 1.e4 e5 2.Nf3 Nc6 3.Bb5, the most studied l
 resource: https://en.wikipedia.org/wiki/Ruy_Lopez
 tags: [opening, white, e4, spanish]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 sources:
   - id: wiki-ruy
     resource: https://en.wikipedia.org/wiki/Ruy_Lopez

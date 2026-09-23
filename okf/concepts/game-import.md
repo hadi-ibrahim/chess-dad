@@ -1,10 +1,10 @@
 ---
 type: Playbook
 title: Game Import
-description: How ChessMentor fetches and parses games from Lichess and Chess.com, including rate limits, tokens, and move-format handling.
+description: How Chess Dad fetches and parses games from Lichess and Chess.com, including rate limits, tokens, and move-format handling.
 tags: [import, lichess, chesscom, api, rate-limits]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: lichess-export
@@ -18,10 +18,10 @@ sources:
     title: Chess.com Published-Data API
   - id: lichess-importer-code
     resource: src/lib/importers/lichess.ts
-    title: ChessMentor — Lichess fetching, throttling, and move parsing
+    title: Chess Dad — Lichess fetching, throttling, and move parsing
   - id: chesscom-importer-code
     resource: src/lib/importers/chesscom.ts
-    title: ChessMentor — Chess.com archives, clocks, and variant filtering
+    title: Chess Dad — Chess.com archives, clocks, and variant filtering
 ---
 
 # Overview

@@ -2,9 +2,9 @@
 okf_version: "0.2"
 ---
 
-# ChessMentor Knowledge Bundle
+# Chess Dad Knowledge Bundle
 
-The knowledge behind ChessMentor — an open-source chess tutoring web app —
+The knowledge behind Chess Dad — an open-source chess tutoring web app —
 represented as an Open Knowledge Format (OKF v0.2) bundle. It stores the
 coaching rules, move-classification thresholds, weakness definitions, tactical
 motif taxonomy, accuracy metric, spaced-repetition policy, and opening theory

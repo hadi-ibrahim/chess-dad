@@ -9,16 +9,16 @@ updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: review-screen-code
     resource: "src/app/review/[id]/GameReview.tsx"
-    title: ChessMentor — GameReview screen
+    title: Chess Dad — GameReview screen
   - id: review-colors-code
     resource: src/components/colors.ts
-    title: ChessMentor — classification colours, labels, glyphs
+    title: Chess Dad — classification colours, labels, glyphs
   - id: review-movelist-code
     resource: src/components/MoveList.tsx
-    title: ChessMentor — move list rendering
+    title: Chess Dad — move list rendering
   - id: critical-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — is_critical computation
+    title: Chess Dad — is_critical computation
 ---
 
 # Overview
@@ -45,9 +45,11 @@ flag when the centipawn loss exceeds 100 or the move was a `miss`.
 
 The screen splits those flagged plies into two tabs:
 
-* **Your mistakes** — flagged plies where `color === playerColor`, in move
-  order; the summary offers **Review the costliest moment** and **First
-  mistake**.
+* **Your mistakes** — flagged plies where `color === playerColor`, sorted by
+  centipawn loss (worst first, which is what the rail's copy promises). Keyboard
+  stepping still follows move order, so `Shift` + arrow walks the game rather than
+  jumping around the list. The summary offers **Review the costliest moment** and
+  **First mistake**.
 * **Their mistakes** — flagged plies by the opponent, shown as chances to
   punish: each row also shows the move the player replied with (the next ply).
 
@@ -89,6 +91,12 @@ The transport steps a ply at a time; the keyboard does the same with the arrow
 keys, while `Shift` + arrows jump to the previous/next critical move, `Home` and
 `End` go to the ends, `F` flips the board, and `Escape` returns to the start.
 Per-game notes are kept in the browser, keyed to the game id.
+
+The screen honours `?ply=<n>` (`/review/356?ply=35`) and opens with that ply
+selected — the games library's "turning point" column links straight there. The
+evaluation bar keeps its numeric label only from `sm` up, so a 390px screen gives
+the extra pixels to the position; the bar itself still announces the value to
+assistive technology.
 
 `Analyze` / `Re-analyze` runs `POST /api/games/:id/analyze` for this game
 directly (not through the queue) at the chosen depth — the screen offers quick

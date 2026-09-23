@@ -9,13 +9,13 @@ updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: openings-screen-code
     resource: src/app/openings/page.tsx
-    title: ChessMentor — opening trainer (step, practise, hints, line states)
+    title: Chess Dad — opening trainer (step, practise, hints, line states)
   - id: openings-lib-code
     resource: src/lib/openings.ts
-    title: ChessMentor — the hand-written theory set
+    title: Chess Dad — the hand-written theory set
   - id: openings-entities
     resource: okf/entities/
-    title: ChessMentor — opening theory notes
+    title: Chess Dad — opening theory notes
 ---
 
 # Overview
@@ -25,6 +25,9 @@ one hand-written main line per opening, each with an ECO code, a name, and a
 Wikipedia reference. It has two modes — **stepping** through the line and
 **practising** it as either colour — and it accepts `?eco=C50` so another screen
 can open a specific line (the insights opening table links here).
+
+On load the screen opens on the line from your own games that you have played
+most (`?eco=` overrides it) rather than an empty placeholder.
 
 # Stepping
 
@@ -77,10 +80,13 @@ attempt so a retry does not double-count.
 
 # Known limits
 
-The set is one scripted line per opening (25 openings, ~5 plies each), so
-"leaving theory" means "this move differs from the one stored line", not "this
-move is not played by masters". Opponent alternatives, a repertoire subset, and a
-spaced-repetition queue for openings are not implemented; the `ideas` field on an
-opening is never populated, and the theory notes under `okf/entities/` are not
-surfaced in the UI. `POST /api/openings` (deviation detection) exists but the
-screen computes deviations client-side.
+The set is one scripted line per opening (25 openings, 1–10 plies), so "leaving
+theory" means "this move differs from the one stored line", not "this move is not
+played by masters". Opponent alternatives are not implemented, the `ideas` field
+on an opening is never populated, and the theory notes under `okf/entities/` are
+not surfaced in the UI.
+
+A review is recorded per line rather than per colour: 74 of this player's 75
+Modern Defense games were as Black, yet the line is scheduled as one item and
+either side can be drilled. `POST /api/openings` (deviation detection) exists but
+the screen computes deviations client-side.

@@ -1,26 +1,26 @@
 ---
 type: Reference
 title: Persistence
-description: The local-first SQLite data model behind ChessMentor — games, positions, the analysis queue, puzzles, caches, and settings.
+description: The local-first SQLite data model behind Chess Dad — games, positions, the analysis queue, puzzles, caches, and settings.
 tags: [storage, sqlite, schema, local-first, privacy]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: schema-code
     resource: src/lib/db.ts
-    title: ChessMentor — SQLite schema and data access
+    title: Chess Dad — SQLite schema and data access
   - id: analysis-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — position writes and engine cache use
+    title: Chess Dad — position writes and engine cache use
   - id: progress-code
     resource: src/lib/okf-progress.ts
-    title: ChessMentor — per-user progress bundle writer
+    title: Chess Dad — per-user progress bundle writer
 ---
 
 # Overview
 
-ChessMentor is local-first: everything lives in a single SQLite file (Node's
+Chess Dad is local-first: everything lives in a single SQLite file (Node's
 built-in `node:sqlite`, WAL mode, foreign keys on) and nothing leaves the machine
 except the Lichess/Chess.com reads and an optional LLM call. One file is easy to
 back up, and personal game history stays private.
@@ -33,6 +33,7 @@ back up, and personal game history stays private.
 | `positions` | One row per ply: FEN, played move, engine best move, evaluation, centipawn loss, classification, motif, phase, clock, `is_critical`, and the coaching text |
 | `jobs` | The durable job queue — imports and analysis (see [Job queue](job-queue.md)) |
 | `puzzles` | Personal puzzles built from your own mistakes, with SM-2 scheduling state |
+| `opening_reviews` | Per-ECO review state for the opening trainer — the same simplified SM-2 fields as `puzzles` |
 | `engine_cache` | FEN → engine evaluation, so repeated positions are never re-searched |
 | `llm_cache` | FEN → coaching explanation, so repeated positions are never re-explained |
 | `settings` | Small key/value store (for example, the Lichess token) |

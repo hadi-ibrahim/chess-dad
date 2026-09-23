@@ -5,7 +5,7 @@ description: The classical 1.e4 e5 2.Nf3 Nc6 3.Bc4 — rapid development toward 
 resource: https://en.wikipedia.org/wiki/Italian_Game
 tags: [opening, white, e4, italian]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 sources:
   - id: wiki-italian
     resource: https://en.wikipedia.org/wiki/Italian_Game

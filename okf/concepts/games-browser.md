@@ -4,12 +4,12 @@ title: Games Browser
 description: How the game library is searched, filtered, and paginated, and what each filter means.
 tags: [games, search, filters, pagination, ui]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: games-query-code
     resource: src/lib/db.ts
-    title: ChessMentor — queryGames() search, filters, and paging
+    title: Chess Dad — queryGames() search, filters, and paging
 ---
 
 # Overview
@@ -62,3 +62,14 @@ turning point links into the [review screen](review-screen.md) at that ply
 Filters, page and page size are mirrored into the query string and hydrated from
 it on mount, so a filtered set survives a trip into a review, a reload, or being
 shared. `/?speed=blitz&result=win&page=2` is a valid entry point.
+
+# Two layouts, two pagers
+
+Above `sm` the library is a table. Below it, nine columns cannot fit — Actions was
+the first thing cut, so a phone could not reach Review at all — and each game
+becomes a card whose primary action is a full-width **Review**, with its result,
+opening, accuracy, flagged count and turning point beside it.
+
+The pager is rendered twice: under the count line at the top of the list and again
+after the last row. With 50 rows per page the footer alone sat roughly ten
+thousand pixels down a phone screen, which made page two unreachable.

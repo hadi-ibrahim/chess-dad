@@ -1,10 +1,10 @@
 ---
 type: Reference
 title: Move Classification
-description: The labels ChessMentor applies to every move, derived from centipawn loss and the engine's best move.
+description: The labels Chess Dad applies to every move, derived from centipawn loss and the engine's best move.
 tags: [analysis, classification, centipawn-loss, engine]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: chesscom-review
@@ -12,10 +12,10 @@ sources:
     title: Chess.com — Game Review
   - id: classification-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — classifyMove() thresholds and centipawn loss
+    title: Chess Dad — classifyMove() thresholds and centipawn loss
   - id: classification-glyphs
     resource: src/components/colors.ts
-    title: ChessMentor — review-UI classification colours and glyphs
+    title: Chess Dad — review-UI classification colours and glyphs
 ---
 
 # Overview
@@ -44,6 +44,15 @@ The complete label set is `book`, `best`, `great`, `good`, `inaccuracy`,
 A **brilliant** sacrifice is the engine's top move when that move captures a
 piece worth less than the piece being moved — the mover gives up more material
 value than they take.
+
+# Mate scores
+
+A forced mate is stored as an evaluation of ±100000 centipawns: a sentinel, not a
+measurement. Anything that averages or displays a loss clamps it first (1000 cp in
+the weakness profile and the games list, ±10000 cp before the coach will describe
+it), and the coach names it as a forced mate rather than a number. Treating the
+sentinel as a real evaluation is what once made the
+[insights dashboard](weakness-definitions.md) nominate the wrong phase.
 
 # Order of evaluation
 
@@ -93,5 +102,5 @@ and a brilliancy carry a glyph; neutral moves (`best`, `great`, `good`, `book`,
 | Miss | `!?` | A forced mate or winning tactic was available — `!?` rather than `×`, which reads as capture notation beside SAN |
 
 [^chesscom-review]: Chess.com's Game Review uses a comparable centipawn-loss
-  model to grade moves; ChessMentor's thresholds are its own open-source
+  model to grade moves; Chess Dad's thresholds are its own open-source
   approximation, not a copy.

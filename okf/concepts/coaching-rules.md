@@ -1,10 +1,10 @@
 ---
 type: Playbook
 title: Coaching Rules
-description: How ChessMentor turns engine analysis into tier-appropriate, plain-language coaching that never contradicts the engine.
+description: How Chess Dad turns engine analysis into tier-appropriate, plain-language coaching that never contradicts the engine.
 tags: [coaching, engine, llm, explanation]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: engine-first
@@ -12,15 +12,15 @@ sources:
     title: OKF specification (referenced for knowledge formatting, not coaching content)
   - id: llm-code
     resource: src/lib/llm.ts
-    title: ChessMentor — explainPosition() and the deterministic fallback
+    title: Chess Dad — explainPosition() and the deterministic fallback
   - id: okf-reader-code
     resource: src/lib/okf.ts
-    title: ChessMentor — readCoachingRules() reader for these sections
+    title: Chess Dad — readCoachingRules() reader for these sections
 ---
 
 # Overview
 
-ChessMentor follows one invariant: **the engine is ground truth, the coach only
+Chess Dad follows one invariant: **the engine is ground truth, the coach only
 explains it.** The LLM never evaluates a position; it receives the engine's
 best move and evaluation and is instructed never to contradict them.[^engine-first]
 This prevents hallucinated chess facts while keeping explanations human and
@@ -40,7 +40,29 @@ When no LLM is configured (or an LLM call fails), the app generates an
 explanation from these rules using the engine data and the motif tag. The
 sections below are the fallback lessons the app reads back for blunder, mistake,
 miss, inaccuracy, and good; the `explanation` itself is assembled from the
-engine's evaluation and best move.
+verdict verb, the engine's preferred move, the evaluation change, the direction of
+the game, and the motif phrase.
+
+Two rules keep that assembly readable:
+
+* **Mate scores are sentinels, not numbers.** The engine stores a forced mate as
+  ±100000 centipawns, so any value at or beyond ±10000 is described as *a forced
+  mate* ("This let a forced mate slip."). An earlier version printed
+  "+999.98 to +999.98 (a 0.0-pawn swing)", which appeared in 224 stored
+  explanations.
+* **The direction of the game is stated.** If the player was better before the
+  move the explanation says so; if they were already worse it says the practical
+  aim was to hold. The lesson therefore never contradicts the evaluation printed
+  on the same card.
+
+Motif tags are detector keys, so each is mapped to a noun phrase (`tactical` → "a
+tactical opportunity", `hung-piece` → "a hung piece") and to an article-free topic
+for drill text ("Solve 10 hung piece puzzles").
+
+The template is cached per FEN in `llm_cache`, so changing it only affects
+positions analysed afterwards. Rebuilding existing text means clearing those cache
+rows and re-analysing the affected games; the engine evaluations come from
+`engine_cache`, so the re-run costs no Stockfish time.
 
 ## Move classification: blunder
 
@@ -71,6 +93,6 @@ selection by comparing candidate moves against the opponent's best reply.
 A solid move, close to best. Keep building: consistency here is what separates
 steady improvers from streaky players.
 
-[^engine-first]: The engine-first rule is a ChessMentor design invariant, not a
+[^engine-first]: The engine-first rule is a Chess Dad design invariant, not a
   claim sourced from the OKF specification; the source is recorded to honor the
   provenance convention.

@@ -4,7 +4,7 @@ title: Spaced Repetition
 description: The scheduling policy for re-serving a player's own missed positions as puzzles.
 tags: [spaced-repetition, sm2, puzzles, memory]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: sm2
@@ -12,10 +12,10 @@ sources:
     title: SuperMemo — SM-2 algorithm
   - id: srs-code
     resource: src/lib/puzzles.ts
-    title: ChessMentor — recordPuzzleAnswer() SM-2 update
+    title: Chess Dad — recordPuzzleAnswer() SM-2 update
   - id: puzzle-creation-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — personal puzzle creation criteria
+    title: Chess Dad — personal puzzle creation criteria
 ---
 
 # Overview
@@ -51,6 +51,9 @@ hint, after a wrong attempt, or through **Show solution** is posted as a failure
 so its interval shortens and the position returns sooner; the
 [puzzles screen](puzzles-screen.md) words this as "with a hint — this drill comes
 back sooner" rather than as a mistake. Nothing else about the schedule changes.
+
+The [opening trainer](openings-screen.md) reuses the same curve, one schedule per
+ECO code, recorded when a line is finished cleanly or deviated from.
 
 [^sm2]: The schedule is a simplified form of the SM-2 algorithm, adapted for
   chess positions rather than flashcards.

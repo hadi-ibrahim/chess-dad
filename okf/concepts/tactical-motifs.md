@@ -1,10 +1,10 @@
 ---
 type: Reference
 title: Tactical Motifs
-description: The pattern taxonomy ChessMentor uses to tag critical mistakes and personal puzzles.
+description: The pattern taxonomy Chess Dad uses to tag critical mistakes and personal puzzles.
 tags: [tactics, motifs, puzzles, training]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: lichess-practice
@@ -12,13 +12,13 @@ sources:
     title: Lichess — Practice (tactical themes)
   - id: motif-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — detectMotif() motif tags
+    title: Chess Dad — detectMotif() motif tags
 ---
 
 # Overview
 
 A **tactical motif** is a reusable attacking or winning pattern. When a move
-loses a pawn's worth of evaluation or more (`cp_loss ≥ 100`), ChessMentor tags
+loses a pawn's worth of evaluation or more (`cp_loss ≥ 100`), Chess Dad tags
 it with the motif that best explains what was missed, so the mistake becomes a
 trainable drill.[^lichess-practice] The tag is stored on the position and reused
 as the personal puzzle's `theme`.
@@ -46,4 +46,4 @@ exact game position and find the best move without the engine. Spaced repetition
 re-serves your own missed positions until the pattern is automatic.
 
 [^lichess-practice]: Lichess's practice module groups tactics by theme;
-  ChessMentor uses its own, smaller tag set to label its own puzzles.
+  Chess Dad uses its own, smaller tag set to label its own puzzles.

@@ -4,7 +4,7 @@ title: Fork
 description: One piece attacks two or more enemy targets at once — the knight fork is the canonical example.
 tags: [tactic, motif, fork]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 sources:
   - id: wiki-fork
     resource: https://en.wikipedia.org/wiki/Fork_(chess)

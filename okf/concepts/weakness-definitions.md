@@ -1,23 +1,23 @@
 ---
 type: Reference
 title: Weakness Definitions
-description: The recurring-mistake categories ChessMentor profiles across a player's games.
+description: The recurring-mistake categories Chess Dad profiles across a player's games.
 tags: [weakness, profiling, insights, improvement]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: weakness-code
     resource: src/lib/weaknesses.ts
-    title: ChessMentor — computeWeaknesses() weakness profile
+    title: Chess Dad — computeWeaknesses() weakness profile
   - id: phase-code
     resource: src/lib/chess-core.ts
-    title: ChessMentor — detectPhase() phase rule
+    title: Chess Dad — detectPhase() phase rule
 ---
 
 # Overview
 
-ChessMentor's value is **pattern over incident**: one blunder is noise, but the
+Chess Dad's value is **pattern over incident**: one blunder is noise, but the
 same mistake across fifty games is a weakness worth training. Each weakness is a
 category aggregated over every analyzed game.
 

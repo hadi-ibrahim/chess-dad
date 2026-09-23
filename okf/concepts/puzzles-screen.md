@@ -9,13 +9,13 @@ updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: puzzles-screen-code
     resource: src/app/puzzles/page.tsx
-    title: ChessMentor — puzzles screen (filters, hints, feedback)
+    title: Chess Dad — puzzles screen (filters, hints, feedback)
   - id: puzzles-lib-code
     resource: src/lib/puzzles.ts
-    title: ChessMentor — puzzle listing, SRS recording, source-position context
+    title: Chess Dad — puzzle listing, SRS recording, source-position context
   - id: puzzles-api-code
     resource: src/app/api/puzzles/route.ts
-    title: ChessMentor — GET/POST /api/puzzles
+    title: Chess Dad — GET/POST /api/puzzles
 ---
 
 # Overview
@@ -103,3 +103,13 @@ and previous puzzle in the filtered set. Every control is a real button and ever
 square is focusable, so the whole loop works from the keyboard. The action row is
 sticky at the bottom of the viewport on small screens, where the board pushes it
 below the fold. A session line counts clean solves and hinted solves as you go.
+
+# Known limits
+
+The motif filter runs client-side over the whole `GET /api/puzzles` payload (1,842
+rows), so changing category costs no round trip but the payload grows with the
+library. The theme chip is visible before the attempt, which gives the answer class
+away. There is no session boundary: the queue is every due drill (1,828 of them),
+so "done" has no shape, and the rail renders 60 rows at a time behind **Show
+more**.
+

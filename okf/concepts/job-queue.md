@@ -4,18 +4,18 @@ title: Job Queue
 description: The durable typed job queue and worker pool that run imports and engine analysis in the background so the app stays responsive.
 tags: [architecture, queue, worker, engine, performance]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: queue-code
     resource: src/lib/queue.ts
-    title: ChessMentor — durable job queue, leases, and retry policy
+    title: Chess Dad — durable job queue, leases, and retry policy
   - id: worker-code
     resource: src/lib/worker.ts
-    title: ChessMentor — worker pool and job dispatch
+    title: Chess Dad — worker pool and job dispatch
   - id: config-code
     resource: src/lib/config.ts
-    title: ChessMentor — concurrency, lease, and pool defaults
+    title: Chess Dad — concurrency, lease, and pool defaults
 ---
 
 # Overview

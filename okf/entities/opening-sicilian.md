@@ -5,7 +5,7 @@ description: Black's most combative answer to 1.e4 — an asymmetrical fight for
 resource: https://en.wikipedia.org/wiki/Sicilian_Defence
 tags: [opening, black, sicilian, e4]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 sources:
   - id: wiki-sicilian
     resource: https://en.wikipedia.org/wiki/Sicilian_Defence

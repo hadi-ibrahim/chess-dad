@@ -1,7 +1,7 @@
 # Update Log
 
 ## 2026-09-22
-* **Creation**: initial ChessMentor knowledge bundle — coaching rules, move classification, weakness definitions, tactical motifs, accuracy metric, spaced repetition, and opening entities.
+* **Creation**: initial Chess Dad knowledge bundle — coaching rules, move classification, weakness definitions, tactical motifs, accuracy metric, spaced repetition, and opening entities.
 * **Update**: added the analysis-queue concept (now [Job queue](concepts/job-queue.md)) after analysis moved to a durable job queue consumed by a background worker pool.
 * **Update**: added [Game import](concepts/game-import.md) documenting Lichess/Chess.com fetching, rate limits and tokens, and SAN/UCI move handling.
 * **Update**: added [Persistence](concepts/persistence.md) documenting the local-first SQLite data model.
@@ -18,4 +18,5 @@
 * **Update**: added [Openings screen](concepts/openings-screen.md) — the trainer now separates "in theory", a real deviation (marked on the board, recoverable) and "line complete", disables lines with nothing to answer for the chosen colour, hints in two stages, exposes the line on mobile instead of hiding it, and accepts `?eco=` so the insights opening table can open a line.
 * **Update**: [Openings screen](concepts/openings-screen.md) now builds a repertoire — each line is joined with the player's per-ECO record (9 of 25 lines played) and with a per-opening review schedule in the new `opening_reviews` table, which finishes cleanly or records a miss on the puzzles' SM-2 curve. "Due" only applies to lines actually played.
 * **Update**: [Games browser](concepts/games-browser.md) rows now carry their own analysis signal (flagged moves, blunders, and the costliest move with its clamped loss and motif), results read Won/Lost/Drew, ECO links into the opening trainer and the turning point deep-links into the review at that ply; filters, page and page size live in the URL.
+* **Update**: post-fix re-critique sync — [coaching rules](concepts/coaching-rules.md) now state that mate scores are sentinels and that the explanation names the direction of the game, plus the `llm_cache` rebuild note; [move classification](concepts/move-classification.md) gained a mate-score section; the [review screen](concepts/review-screen.md) documents `?ply=` and the small-screen eval bar; the [games browser](concepts/games-browser.md) documents its card layout and the repeated pager; the [openings screen](concepts/openings-screen.md) records that it opens on your most-played line and its limits were corrected (the repertoire and review schedule *are* implemented); the [puzzles screen](concepts/puzzles-screen.md) gained a known-limits section; [persistence](concepts/persistence.md) lists the `opening_reviews` table; and [spaced repetition](concepts/spaced-repetition.md) points at the openings schedule.
 

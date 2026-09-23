@@ -1,10 +1,10 @@
 ---
 type: Metric
 title: Accuracy
-description: How ChessMentor computes a per-move and per-game accuracy percentage.
+description: How Chess Dad computes a per-move and per-game accuracy percentage.
 tags: [accuracy, metric, analysis, evaluation]
 status: stable
-generated: { by: chessmentor/1.0, at: 2026-09-22 }
+generated: { by: chessdad/1.0, at: 2026-09-22 }
 updated: { by: "process:okf-code-sync", at: 2026-09-23 }
 sources:
   - id: lichess-accuracy
@@ -12,7 +12,7 @@ sources:
     title: Lichess — Accuracy
   - id: accuracy-code
     resource: src/lib/analysis.ts
-    title: ChessMentor — winProb() and moveAccuracy()
+    title: Chess Dad — winProb() and moveAccuracy()
 ---
 
 # Overview
@@ -43,4 +43,4 @@ computed from the change in **win probability** caused by the move.
    scores 100).[^lichess-accuracy]
 
 [^lichess-accuracy]: The exponential accuracy formula is the one documented by
-  Lichess; ChessMentor reuses it under the same open spirit.
+  Lichess; Chess Dad reuses it under the same open spirit.
