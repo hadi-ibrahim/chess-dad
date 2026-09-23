@@ -31,6 +31,8 @@ interface Puzzle {
   source_ply: number | null;
   source_san: string | null;
   prev_san: string | null;
+  /** Cached engine line for this position (UCI): the solution plus the best replies. */
+  pv: string[];
 }
 
 interface SrsResult {
@@ -49,6 +51,8 @@ const CATEGORIES: { key: string | null; label: string }[] = [
 ];
 
 const LIST_PAGE = 60;
+/** Plies played out after the solution: engine reply, your reply, engine, yours. */
+const MAX_LINE_PLIES = 4;
 const MINUS = "\u2212";
 
 function themeKey(p: Puzzle): string {
@@ -84,7 +88,10 @@ export default function Puzzles() {
   const [illegal, setIllegal] = useState<string | null>(null);
   const [hintStage, setHintStage] = useState<0 | 1 | 2>(0);
   const [outcome, setOutcome] = useState<"solved" | "assisted" | "shown" | null>(null);
-  const [playedFen, setPlayedFen] = useState<string | null>(null);
+  const [line, setLine] = useState<string[]>([]);
+  const [lineIndex, setLineIndex] = useState(0); // plies of `line` already on the board
+  const [lineFen, setLineFen] = useState<string | null>(null);
+  const [lineError, setLineError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [boardKey, setBoardKey] = useState(0);
   const [session, setSession] = useState({ solved: 0, assisted: 0, wrong: 0 });
@@ -110,7 +117,10 @@ export default function Puzzles() {
     setHintStage(0);
     setAttempts(0);
     setOutcome(null);
-    setPlayedFen(null);
+    setLine([]);
+    setLineIndex(0);
+    setLineFen(null);
+    setLineError(null);
     setSelected(null);
     setBoardKey((k) => k + 1);
   }
@@ -199,21 +209,41 @@ export default function Puzzles() {
       });
   }
 
-  /** The position after the solution: the answer is shown on the board, not just described. */
-  function fenAfterSolution(): string | null {
+  /** The position after applying the first `moves.length` moves of a UCI line. */
+  function fenAfter(moves: string[]): string | null {
     if (!puzzle) return null;
     try {
       const chess = new Chess(puzzle.fen);
-      const promotion = puzzle.solution_uci.length === 5 ? puzzle.solution_uci[4] : "q";
-      chess.move({
-        from: puzzle.solution_uci.slice(0, 2),
-        to: puzzle.solution_uci.slice(2, 4),
-        promotion,
-      });
+      for (const uci of moves) {
+        chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] ?? "q" });
+      }
       return chess.fen();
     } catch {
       return null;
     }
+  }
+
+  /** SAN for the move at `index` of the line, computed from the position before it. */
+  function sanAt(index: number): string {
+    if (!puzzle) return "";
+    try {
+      const chess = new Chess(puzzle.fen);
+      for (let i = 0; i < index; i++) {
+        chess.move({ from: line[i].slice(0, 2), to: line[i].slice(2, 4), promotion: line[i][4] ?? "q" });
+      }
+      const uci = line[index];
+      const move = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] ?? "q" });
+      return move?.san ?? uci;
+    } catch {
+      return line[index] ?? "";
+    }
+  }
+
+  /** Put the first `index` plies of the line on the board. */
+  function applyLine(index: number) {
+    const moves = line.slice(0, index);
+    setLineFen(fenAfter(moves));
+    setLineIndex(index);
   }
 
   function finish(kind: "solved" | "assisted" | "shown") {
@@ -222,7 +252,13 @@ export default function Puzzles() {
     setAttempt(null);
     setIllegal(null);
     setSelected(null);
-    setPlayedFen(fenAfterSolution());
+    // Play the drill out: the solution plus the engine's cached replies, so the
+    // player learns to convert the position rather than just recognise move one.
+    const plies = puzzle.pv.length > 0 ? puzzle.pv.slice(0, 1 + MAX_LINE_PLIES) : [puzzle.solution_uci];
+    setLine(plies);
+    setLineIndex(1);
+    setLineFen(fenAfter(plies.slice(0, 1)));
+    setLineError(null);
     setSession((s) => ({
       solved: s.solved + (kind === "solved" ? 1 : 0),
       assisted: s.assisted + (kind === "assisted" ? 1 : 0),
@@ -233,9 +269,53 @@ export default function Puzzles() {
     recordSrs(puzzle.id, kind === "solved");
   }
 
+  const lineActive = outcome != null && line.length > 1 && lineIndex < line.length;
+  const playerTurnInLine = lineActive && lineIndex % 2 === 0;
+  const lineComplete = outcome != null && line.length > 1 && lineIndex >= line.length;
+
+  // The engine's replies come from the stored line and play themselves.
+  useEffect(() => {
+    if (!lineActive || lineIndex % 2 === 0) return;
+    const timer = setTimeout(() => applyLine(lineIndex + 1), 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyLine reads the current line
+  }, [lineActive, lineIndex, line]);
+
+  function playOutLine() {
+    setLineError(null);
+    applyLine(line.length);
+  }
+
   /** @returns "played" when a move was accepted (right or wrong), otherwise why not. */
   function tryMove(from: string, to: string): "played" | "illegal" | "blocked" {
-    if (!puzzle || outcome || attempt) return "blocked";
+    if (!puzzle) return "blocked";
+
+    // Continuation: only the player's plies of the stored line are accepted, and
+    // a miss costs nothing (the drill is already scored) — it just gets marked.
+    if (outcome) {
+      if (!playerTurnInLine) return "blocked";
+      const chess = new Chess(lineFen ?? puzzle.fen);
+      let move = null;
+      try {
+        move = chess.move({ from, to, promotion: "q" });
+      } catch {
+        move = null;
+      }
+      if (!move) {
+        setIllegal(`${from}–${to} is not a legal move here.`);
+        return "illegal";
+      }
+      setSelected(null);
+      if (move.lan === line[lineIndex]) {
+        setLineError(null);
+        applyLine(lineIndex + 1);
+        return "played";
+      }
+      setLineError(`${move.san} is not the line — the engine plays ${sanAt(lineIndex)}.`);
+      return "played";
+    }
+
+    if (attempt) return "blocked";
     if (from === to) return "blocked"; // a same-square drop is a tap, not an attempt
     const chess = new Chess(puzzle.fen);
     const promotion = puzzle.solution_uci.length === 5 ? puzzle.solution_uci[4] : "q";
@@ -267,15 +347,23 @@ export default function Puzzles() {
   }
 
   function onSquareSelect(square: string) {
-    if (!puzzle || outcome || attempt) return;
-    if (selected && selected !== square) {
+    if (!puzzle) return;
+    // Locked by a wrong first attempt, or waiting on the engine mid-line.
+    if (!outcome && attempt) return;
+    if (outcome && !playerTurnInLine) return;
+    const baseFen = lineFen ?? puzzle.fen;
+    const chess = new Chess(baseFen);
+    const piece = chess.get(square as Square);
+    const toMove = baseFen.split(" ")[1];
+    const ownPiece = !!(piece && piece.color === toMove);
+    // Clicking another of your own pieces re-selects; only a non-own square is
+    // treated as a destination. (Attempting the move first turned a re-select
+    // into a bogus "not a legal move" message.)
+    if (selected && selected !== square && !ownPiece) {
       const result = tryMove(selected, square);
       if (result === "played" || result === "illegal") return;
     }
-    const chess = new Chess(puzzle.fen);
-    const piece = chess.get(square as Square);
-    const toMove = puzzle.fen.split(" ")[1];
-    setSelected(piece && piece.color === toMove ? square : null);
+    setSelected(ownPiece ? square : null);
   }
 
   function advanceHint() {
@@ -486,9 +574,9 @@ export default function Puzzles() {
             <div className="min-w-0" style={{ maxWidth: "min(640px, 62vh)" }}>
               <ChessBoard
                 key={boardKey}
-                fen={playedFen ?? puzzle.fen}
+                fen={lineFen ?? puzzle.fen}
                 orientation={orientation}
-                interactive={!outcome && !attempt}
+                interactive={playerTurnInLine || (!outcome && !attempt)}
                 onDrop={onDrop}
                 onSquareSelect={onSquareSelect}
                 allowDrawingArrows={false}
@@ -571,6 +659,33 @@ export default function Puzzles() {
                 <p className="mt-1 text-xs text-rose-300/80">
                   Your attempt is marked on the board. Try again, or take a hint.
                 </p>
+              </div>
+            ) : null}
+
+            {outcome && line.length > 1 ? (
+              <div className="rounded-xl border border-indigo-900 bg-indigo-950/30 p-4">
+                <p className="text-sm text-indigo-100">
+                  {lineComplete
+                    ? "Line complete — you played it out beyond the solution. That is how the position converts."
+                    : lineError
+                      ? lineError
+                      : playerTurnInLine
+                        ? `The engine played ${sanAt(lineIndex - 1)}. Your move.`
+                        : `The engine plays ${sanAt(lineIndex)}…`}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={playOutLine}
+                    disabled={lineComplete}
+                    className="min-h-11 rounded-lg border border-indigo-700/70 px-3 text-sm font-semibold text-indigo-200 hover:bg-indigo-950/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-40"
+                  >
+                    {lineComplete ? "Line played" : "Show me the rest"}
+                  </button>
+                  <span className="text-xs text-indigo-200/80">
+                    Playing it out is unscored — the drill is already counted.
+                  </span>
+                </div>
               </div>
             ) : null}
 

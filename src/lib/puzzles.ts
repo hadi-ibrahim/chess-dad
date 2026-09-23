@@ -18,6 +18,8 @@ export interface PuzzleWithContext extends PuzzleRow {
   source_san: string | null;
   /** The opponent's move immediately before the puzzle position. */
   prev_san: string | null;
+  /** Cached engine line for the puzzle position (UCI), used to play the drill out. */
+  pv: string[];
 }
 
 /** All puzzles, newest first, with game context and the source position's coaching. */
@@ -29,11 +31,12 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
               pos.explanation AS source_explanation, pos.key_lesson AS source_key_lesson,
               pos.classification AS source_classification, pos.centipawn_loss AS source_cpl,
               pos.ply AS source_ply, pos.san AS source_san,
-              prev.san AS prev_san
+              prev.san AS prev_san, ec.pv AS engine_pv
        FROM puzzles p
        JOIN games g ON g.id = p.game_id
        LEFT JOIN positions pos ON pos.id = p.position_id
        LEFT JOIN positions prev ON prev.game_id = pos.game_id AND prev.ply = pos.ply - 1
+       LEFT JOIN engine_cache ec ON ec.fen = p.fen
        ORDER BY p.id DESC`
     )
     .all() as Record<string, unknown>[];
@@ -67,6 +70,7 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
     source_ply: r.source_ply == null ? null : Number(r.source_ply),
     source_san: r.source_san == null ? null : String(r.source_san),
     prev_san: r.prev_san == null ? null : String(r.prev_san),
+    pv: r.engine_pv == null ? [] : String(r.engine_pv).trim().split(/\s+/).filter(Boolean),
   }));
 }
 
