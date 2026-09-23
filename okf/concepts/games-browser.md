@@ -46,3 +46,19 @@ Queries take `page` and `pageSize` (the server clamps it to 1–200; the UI offe
 25, 50, 100, or 200, default 50) and return that page plus `total`, `analyzed`,
 and `pageCount`. An out-of-range page is clamped to the last page rather than
 returning nothing, so a stale link still shows results.
+
+# What each row says
+
+The listing joins each game with its own analysis signal: the number of flagged
+moves (mistake + blunder + miss) by the player, the count of blunders, and the
+costliest of them — its ply, SAN, clamped centipawn loss (mate scores count as
+1000 cp) and motif. The result is rendered as Won/Lost/Drew rather than raw PGN,
+the ECO code links into the [opening trainer](openings-screen.md), and the
+turning point links into the [review screen](review-screen.md) at that ply
+(`/review/<id>?ply=<n>`).
+
+# View state lives in the URL
+
+Filters, page and page size are mirrored into the query string and hydrated from
+it on mount, so a filtered set survives a trip into a review, a reload, or being
+shared. `/?speed=blitz&result=win&page=2` is a valid entry point.
