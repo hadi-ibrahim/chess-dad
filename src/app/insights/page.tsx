@@ -45,7 +45,19 @@ interface Profile {
   };
   accuracyTrend: { gameId: number; playedAt: string | null; accuracy: number | null }[];
   summary: { avgAccuracy: number | null; blunderRate: number; mostCommonMotif: string | null; weakestPhase: string | null };
+  window?: string;
 }
+
+type ProfileWindow = "all" | "30" | "100" | "month";
+
+const WINDOWS: { key: ProfileWindow; label: string }[] = [
+  { key: "30", label: "Last 30 games" },
+  { key: "100", label: "Last 100" },
+  { key: "month", label: "Last 30 days" },
+  { key: "all", label: "All time" },
+];
+
+type OpeningSort = "games" | "winRate" | "avgAccuracy";
 
 /** Motif tags are detector keys; these are the same words the puzzles screen uses. */
 function motifLabel(motif: string): string {
@@ -67,12 +79,15 @@ export default function Insights() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [showAllOpenings, setShowAllOpenings] = useState(false);
+  const [profileWindow, setProfileWindow] = useState<ProfileWindow>("all");
+  const [sortKey, setSortKey] = useState<OpeningSort>("games");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the error before a refetch
     setError(null);
-    fetch("/api/insights")
+    fetch(`/api/insights?window=${profileWindow}`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`Insights request failed (${r.status})`);
         const body = (await r.json()) as Profile;
@@ -88,7 +103,7 @@ export default function Insights() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, profileWindow]);
 
   const TREND_WINDOW = 40;
   const accuracyData = useMemo(() => {
@@ -114,6 +129,23 @@ export default function Insights() {
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
     return mean(recent) - mean(prior);
   }, [profile]);
+
+  const sortedOpenings = useMemo(() => {
+    const list = [...(profile?.openings ?? [])];
+    list.sort((a, b) => {
+      const delta = a[sortKey] - b[sortKey];
+      return sortDir === "asc" ? delta : -delta;
+    });
+    return list;
+  }, [profile, sortKey, sortDir]);
+
+  function toggleSort(key: OpeningSort) {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  }
 
   /** Catch-all detector tag: it means "flagged but not classified", not a motif. */
   const motifData = useMemo(
@@ -159,6 +191,24 @@ export default function Insights() {
     );
   }
 
+  if (profile.analyzedGames === 0 && profileWindow !== "all") {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">Insights</h1>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center text-zinc-300">
+          No analysed games in this window.{" "}
+          <button
+            type="button"
+            onClick={() => setProfileWindow("all")}
+            className="underline hover:text-zinc-100"
+          >
+            Show all time
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (profile.analyzedGames === 0) {
     return (
       <div className="space-y-4">
@@ -191,8 +241,27 @@ export default function Insights() {
         <h1 className="text-2xl font-bold">Insights</h1>
         <p className="text-sm text-zinc-400">
           Pattern over incident — aggregated across {profile.analyzedGames} analysed game
-          {profile.analyzedGames === 1 ? "" : "s"}.
+          {profile.analyzedGames === 1 ? "" : "s"}
+          {profileWindow === "all" ? " (all time)" : ""}.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Time window">
+          <span className="text-xs uppercase tracking-wider text-zinc-400">Scope</span>
+          {WINDOWS.map((w) => (
+            <button
+              key={w.key}
+              type="button"
+              onClick={() => setProfileWindow(w.key)}
+              aria-pressed={profileWindow === w.key}
+              className={`min-h-10 rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${
+                profileWindow === w.key
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              }`}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* The dashboard's job is to say what to work on next, so it starts with one. */}
@@ -436,16 +505,28 @@ export default function Insights() {
             <thead className="text-left text-xs uppercase tracking-wider text-zinc-400">
               <tr>
                 <th className="px-2 py-2">Opening</th>
-                <th className="px-2 py-2">Games</th>
+                <th className="px-2 py-2" aria-sort={sortKey === "games" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                  <button type="button" onClick={() => toggleSort("games")} className="uppercase underline-offset-2 hover:underline">
+                    Games {sortKey === "games" ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                </th>
                 <th className="px-2 py-2">Wins</th>
                 <th className="px-2 py-2">Draws</th>
                 <th className="px-2 py-2">Losses</th>
-                <th className="px-2 py-2">Win %</th>
-                <th className="px-2 py-2">Avg acc.</th>
+                <th className="px-2 py-2" aria-sort={sortKey === "winRate" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                  <button type="button" onClick={() => toggleSort("winRate")} className="uppercase underline-offset-2 hover:underline">
+                    Win % {sortKey === "winRate" ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                </th>
+                <th className="px-2 py-2" aria-sort={sortKey === "avgAccuracy" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                  <button type="button" onClick={() => toggleSort("avgAccuracy")} className="uppercase underline-offset-2 hover:underline">
+                    Avg acc. {sortKey === "avgAccuracy" ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
-              {profile.openings
+              {sortedOpenings
                 .filter((o) => showAllOpenings || o.games >= 5)
                 .map((o) => (
                 <tr key={o.eco}>
@@ -472,7 +553,7 @@ export default function Insights() {
         </div>
 
         <ul className="space-y-2 sm:hidden">
-          {profile.openings
+          {sortedOpenings
             .filter((o) => showAllOpenings || o.games >= 5)
             .map((o) => (
             <li key={o.eco} className="rounded-lg border border-zinc-800 p-3">

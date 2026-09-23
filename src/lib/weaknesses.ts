@@ -130,15 +130,44 @@ interface Row {
   game_id: number;
 }
 
-export function computeWeaknesses(): WeaknessProfile {
+export type ProfileWindow = "all" | "30" | "100" | "month";
+
+export const PROFILE_WINDOWS: ProfileWindow[] = ["30", "100", "month", "all"];
+
+/**
+ * Aggregate the weakness profile, optionally scoped to recent form: the last 30
+ * or 100 analysed games, or the last 30 days. All-time was the only view before,
+ * which cannot answer "am I improving?".
+ */
+export function computeWeaknesses(window: ProfileWindow = "all"): WeaknessProfile {
   const db = getDb();
   const totalGames = (db.prepare("SELECT COUNT(*) n FROM games").get() as { n: number }).n;
-  const analyzedGames = (db.prepare("SELECT COUNT(*) n FROM games WHERE analyzed = 1").get() as { n: number }).n;
+
+  let scopeIds: number[] | null = null;
+  if (window === "30" || window === "100") {
+    const limit = window === "30" ? 30 : 100;
+    scopeIds = (
+      db
+        .prepare("SELECT id FROM games WHERE analyzed = 1 ORDER BY played_at DESC, id DESC LIMIT ?")
+        .all(limit) as { id: number }[]
+    ).map((r) => Number(r.id));
+  } else if (window === "month") {
+    scopeIds = (
+      db
+        .prepare("SELECT id FROM games WHERE analyzed = 1 AND played_at >= datetime('now', '-30 days')")
+        .all() as { id: number }[]
+    ).map((r) => Number(r.id));
+  }
+
+  const analyzedGames = scopeIds
+    ? scopeIds.length
+    : (db.prepare("SELECT COUNT(*) n FROM games WHERE analyzed = 1").get() as { n: number }).n;
   const profile = emptyProfile(Number(totalGames), Number(analyzedGames));
 
+  const scopeClause = scopeIds ? ` AND id IN (${scopeIds.map(() => "?").join(",")})` : "";
   const games = db
-    .prepare("SELECT * FROM games WHERE analyzed = 1 ORDER BY played_at ASC")
-    .all() as Record<string, unknown>[];
+    .prepare(`SELECT * FROM games WHERE analyzed = 1${scopeClause} ORDER BY played_at ASC`)
+    .all(...(scopeIds ?? [])) as Record<string, unknown>[];
 
   // Color performance + accuracy trend (per game).
   for (const g of games) {
@@ -168,9 +197,11 @@ export function computeWeaknesses(): WeaknessProfile {
               p.clock_seconds, g.player_color, g.eco, g.opening_name, g.result,
               g.accuracy, g.played_at, g.id AS game_id
        FROM positions p JOIN games g ON g.id = p.game_id
-       WHERE g.analyzed = 1 AND p.color = g.player_color`
+       WHERE g.analyzed = 1 AND p.color = g.player_color${
+         scopeIds ? ` AND p.game_id IN (${scopeIds.map(() => "?").join(",")})` : ""
+       }`
     )
-    .all() as unknown as Row[];
+    .all(...(scopeIds ?? [])) as unknown as Row[];
 
   const motifCounts = new Map<string, number>();
   const phaseAgg = new Map<
