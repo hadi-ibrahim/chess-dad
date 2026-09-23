@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import ChessBoard, { type BoardArrow, type BoardMark } from "@/components/ChessBoard";
 import EvalBar from "@/components/EvalBar";
@@ -178,17 +178,40 @@ function CriticalMoments({
   onSelect: (ply: number) => void;
   emptyHint: string;
 }) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const rowRefs = useRef<Record<number, HTMLLIElement | null>>({});
+
+  // Reveal the selected row inside this panel only: scrollIntoView would also
+  // scroll the page, which is what made picking a mistake jump the screen.
+  useEffect(() => {
+    const container = listRef.current;
+    const item = rowRefs.current[currentPly];
+    if (!container || !item) return;
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    if (itemRect.top < containerRect.top) container.scrollTop += itemRect.top - containerRect.top;
+    else if (itemRect.bottom > containerRect.bottom) {
+      container.scrollTop += itemRect.bottom - containerRect.bottom;
+    }
+  }, [currentPly]);
+
   if (positions.length === 0) {
     return <p className="px-1 py-2 text-xs text-zinc-400">{emptyHint}</p>;
   }
   return (
-    <ul className="space-y-1">
-      {positions.map((p) => {
+    <div ref={listRef} className="mt-2 max-h-[380px] overflow-auto pr-1">
+      <ul className="space-y-1">
+        {positions.map((p) => {
         const colour = classColor(p.classification);
         const reply = all[p.ply + 1];
         const isMine = p.color === playerColor;
         return (
-          <li key={p.ply}>
+          <li
+            key={p.ply}
+            ref={(el) => {
+              rowRefs.current[p.ply] = el;
+            }}
+          >
             <button
               type="button"
               onClick={() => onSelect(p.ply)}
@@ -227,7 +250,8 @@ function CriticalMoments({
           </li>
         );
       })}
-    </ul>
+      </ul>
+    </div>
   );
 }
 
@@ -884,20 +908,18 @@ export default function GameReview({ id }: { id: string }) {
                 ? "Every move the engine flagged as yours, worst first — the leaks to fix."
                 : "Where your opponent went wrong and what you replied. Punishing these is its own skill."}
             </p>
-            <div className="mt-2 max-h-[380px] overflow-auto pr-1">
-              <CriticalMoments
-                positions={activeList}
-                all={positions}
-                playerColor={playerColor}
-                currentPly={currentPly}
-                onSelect={setCurrentPly}
-                emptyHint={
-                  tab === "yours"
-                    ? "No big mistakes in this game — check the other tab."
-                    : "Your opponent never gave you a clear chance in this game."
-                }
-              />
-            </div>
+            <CriticalMoments
+              positions={activeList}
+              all={positions}
+              playerColor={playerColor}
+              currentPly={currentPly}
+              onSelect={setCurrentPly}
+              emptyHint={
+                tab === "yours"
+                  ? "No big mistakes in this game — check the other tab."
+                  : "Your opponent never gave you a clear chance in this game."
+              }
+            />
           </section>
 
           <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">

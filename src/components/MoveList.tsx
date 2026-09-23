@@ -38,11 +38,21 @@ export default function MoveList({
   onSelect: (ply: number) => void;
 }) {
   const itemRefs = useRef<Record<number, HTMLButtonElement | null>>({});
+  const listRef = useRef<HTMLDivElement | null>(null);
 
-  // Stepping with the keyboard or the transport buttons should keep the move
-  // you are on visible, not leave the list parked where it was.
+  // Keep the selected move visible inside this list only. scrollIntoView also
+  // scrolls every ancestor, which yanked the whole page down whenever a mistake
+  // was picked from the rail.
   useEffect(() => {
-    itemRefs.current[currentPly]?.scrollIntoView({ block: "nearest" });
+    const container = listRef.current;
+    const item = itemRefs.current[currentPly];
+    if (!container || !item) return;
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    if (itemRect.top < containerRect.top) container.scrollTop += itemRect.top - containerRect.top;
+    else if (itemRect.bottom > containerRect.bottom) {
+      container.scrollTop += itemRect.bottom - containerRect.bottom;
+    }
   }, [currentPly]);
 
   // Pair white/black moves into rows.
@@ -56,7 +66,7 @@ export default function MoveList({
   }
 
   return (
-    <div className="max-h-[420px] overflow-auto pr-1 text-sm">
+    <div ref={listRef} className="max-h-[420px] overflow-auto pr-1 text-sm">
       <button
         type="button"
         onClick={() => onSelect(-1)}
