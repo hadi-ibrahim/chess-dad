@@ -45,14 +45,29 @@ category aggregated over every analyzed game.
 * **Opening performance** — win/draw/loss, win rate, and average game accuracy
   by ECO code, capped at the 30 most-played openings.
 * **Color-specific** — games, wins, draws, and losses as White versus Black.
+* **Recent brilliance** — `brilliant` moves (the engine's top choice *and* a
+  sacrifice), newest first, each carrying its phase, opponent, and result and
+  deep-linking to that ply on the [review screen](review-screen.md). This is the
+  deliberate counterweight to everything above: the dashboard first says what to
+  work on, then shows what already works. Brilliancy is recorded for both
+  colours, so every move is tagged `me`/`them` and the section offers a
+  **Mine / Against me / Both** toggle, defaulting to your own. Each row also says
+  *whose* move it is in words: the piece's colour does not say, and reading your
+  own brilliancy as one played against you is the obvious failure mode. The two
+  sides are fetched in one pass but split before capping, so a recent run by
+  either side cannot crowd the other out of the list. In the development database
+  the opponent's outnumber yours (323 of 590), so an unsplit list would be mostly
+  theirs.
 
 # How it is used
 
 The [insights dashboard](../../src/app/insights/page.tsx) surfaces these
 categories as stat cards, an accuracy trend, a recurring-motif bar chart, a
 phase-performance grid, an opening-performance table, a time-management panel,
-and a colour-performance panel. Each of the player's own blunders, mistakes, and
-misses with an engine best move is also turned into a personal
+a colour-performance panel, and a recent-brilliance list that links each of the
+player's best-move sacrifices into the board at that exact ply. Each of the
+player's own blunders, mistakes, and misses with an engine best move is also
+turned into a personal
 [puzzle](spaced-repetition.md) tagged with its motif.
 
 Phase cards therefore lead with the error rate and show the median loss, because
