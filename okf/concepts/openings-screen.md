@@ -59,6 +59,22 @@ move drawn as a green arrow. Practice mode also offers **Undo**, **Play it for
 me**, **Switch side** and **Reset**. Every square is focusable, so a line can be
 played by clicking or with `Tab` + `Enter` as well as by dragging.
 
+# Your repertoire
+
+Each opening is joined with the player's own results (`games` by ECO: games,
+wins, draws, losses, score percentage, average accuracy) and with its review
+schedule in `opening_reviews`. The screen opens scoped to **Your repertoire** —
+the lines you have actually played, most played first — with **Due** and **All**
+alongside it, and each row carries its record and a due chip. "Due" means an
+opening you play whose next review has arrived; a line you have never had on the
+board is not overdue.
+
+Finishing a line cleanly records a success; a deviation records a miss. The
+schedule is the same simplified SM-2 curve the puzzles use (first success 1 day,
+second 6, then `interval * ease`; a miss resets to 1 day and drops the ease by
+0.2, floored at 1.3), stored per ECO in `opening_reviews` and recorded once per
+attempt so a retry does not double-count.
+
 # Known limits
 
 The set is one scripted line per opening (25 openings, ~5 plies each), so
