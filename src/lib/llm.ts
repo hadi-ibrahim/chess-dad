@@ -108,7 +108,10 @@ function parseExplanation(content: string): LLMExplanation {
   }
 }
 
+const MATE_CP = 10_000; // the engine's mate scores are stored as +/-100000 cp
+
 function fmtCp(cp: number): string {
+  if (Math.abs(cp) >= MATE_CP) return cp > 0 ? "a forced mate" : "a forced mate against you";
   const pawns = (cp / 100).toFixed(2);
   const sign = cp >= 0 ? "+" : "";
   return `${sign}${pawns}`;
@@ -164,9 +167,19 @@ function fallbackExplain(i: ExplainInput): LLMExplanation {
   const bestPhrase = i.bestSan
     ? `The engine preferred ${i.bestSan} instead of ${i.playedSan || "your move"}.`
     : "";
+  // Mate scores are sentinels, not evaluations: "+999.98 to +999.98 (a 0.0-pawn
+  // swing)" was nonsense that appeared in 242 stored explanations.
+  const mateBefore = Math.abs(i.evalBeforeCp) >= MATE_CP;
+  const mateAfter = Math.abs(i.evalAfterCp) >= MATE_CP;
   const evalPhrase =
-    `This changed the evaluation from ${fmtCp(i.evalBeforeCp)} to ${fmtCp(i.evalAfterCp)}` +
-    ` (a ${lostPawns}-pawn swing).`;
+    mateBefore || mateAfter
+      ? !mateBefore && mateAfter
+        ? "This handed the opponent a forced mate."
+        : mateBefore && !mateAfter
+          ? "This let a forced mate slip."
+          : "A forced mate was already on the board."
+      : `This changed the evaluation from ${fmtCp(i.evalBeforeCp)} to ${fmtCp(i.evalAfterCp)}` +
+        ` (a ${lostPawns}-pawn swing).`;
 
   const motifPhrase = i.motif
     ? ` The pattern was ${MOTIF_PHRASES[i.motif] ?? i.motif.replace(/-/g, " ")}.`

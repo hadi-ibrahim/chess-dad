@@ -230,6 +230,47 @@ export default function Home() {
             </>
           )}
         </p>
+        {pageCount > 1 ? (
+          /* The pager used to exist only below 50 rows (y≈10,729 on a phone), so
+             page 2 was unreachable from the count line. */
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={pager.first}
+              disabled={page <= 1}
+              aria-label="First page"
+              className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+            >
+              «
+            </button>
+            <button
+              onClick={pager.prev}
+              disabled={page <= 1}
+              aria-label="Previous page"
+              className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span className="text-zinc-300">
+              Page {page} / {pageCount}
+            </span>
+            <button
+              onClick={pager.next}
+              disabled={page >= pageCount}
+              aria-label="Next page"
+              className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+            >
+              Next
+            </button>
+            <button
+              onClick={pager.last}
+              disabled={page >= pageCount}
+              aria-label="Last page"
+              className="min-h-11 rounded bg-zinc-800 px-3 disabled:opacity-40"
+            >
+              »
+            </button>
+          </div>
+        ) : null}
         {pending > 0 && (
           <button
             onClick={enqueueAll}

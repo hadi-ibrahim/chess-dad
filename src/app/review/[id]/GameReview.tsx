@@ -881,7 +881,7 @@ export default function GameReview({ id }: { id: string }) {
                 Your evaluation
               </h2>
               <span className="text-xs text-zinc-400">
-                click the graph to jump · dots mark critical moves
+                click the graph to jump · dots mark critical moves · one pawn ≈ ±1.0
               </span>
             </div>
             <EvalGraph points={graphPoints} currentPly={currentPly} onSelect={setCurrentPly} />

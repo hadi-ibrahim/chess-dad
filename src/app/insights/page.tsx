@@ -535,7 +535,8 @@ export default function Insights() {
                       href={`/openings?eco=${encodeURIComponent(o.eco)}`}
                       className="underline-offset-2 hover:underline"
                     >
-                      <span className="font-mono text-xs text-zinc-400">{o.eco}</span> {o.name || "—"}
+                      <span className="font-mono text-xs text-zinc-400">{o.eco}</span>{" "}
+                      {o.name && o.name !== o.eco ? o.name : ""}
                     </Link>
                     {o.games < 5 ? (
                       <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
@@ -566,7 +567,8 @@ export default function Insights() {
                 href={`/openings?eco=${encodeURIComponent(o.eco)}`}
                 className="text-sm text-zinc-100 underline-offset-2 hover:underline"
               >
-                <span className="font-mono text-xs text-zinc-400">{o.eco}</span> {o.name || "—"}
+                <span className="font-mono text-xs text-zinc-400">{o.eco}</span>{" "}
+                {o.name && o.name !== o.eco ? o.name : ""}
               </Link>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-300">
                 <span className="font-mono">{o.games} games</span>

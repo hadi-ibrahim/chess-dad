@@ -35,7 +35,9 @@ export default function EvalBar({
         />
         <div aria-hidden className="absolute inset-x-0 top-1/2 h-px bg-zinc-400/40" />
       </div>
-      <div className="self-center text-[11px] font-mono leading-tight text-zinc-400">{label}</div>
+      <div className="hidden self-center text-[11px] font-mono leading-tight text-zinc-400 sm:block">
+        {label}
+      </div>
     </div>
   );
 }

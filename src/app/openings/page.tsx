@@ -151,6 +151,13 @@ export default function Openings() {
     if (match) {
       selectOpening(match);
       setScope("all");
+    } else {
+      // Opening on an empty placeholder hid the page's one job behind a 758px
+      // panel; start on the line from your own games you have played most.
+      const mine = openings
+        .filter((o) => o.record)
+        .sort((a, b) => (b.record?.games ?? 0) - (a.record?.games ?? 0))[0];
+      if (mine) selectOpening(mine);
     }
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on first load
@@ -437,7 +444,8 @@ export default function Openings() {
                 </span>
                 {selected.record ? (
                   <span className="text-sm text-zinc-400">
-                    you: {selected.record.games} games · {selected.record.winRate}% score
+                    you: {selected.record.games} {selected.record.games === 1 ? "game" : "games"} ·{" "}
+                    {selected.record.winRate}% score
                     {selected.record.avgAccuracy != null
                       ? ` · ${selected.record.avgAccuracy.toFixed(1)}% acc`
                       : ""}
@@ -714,10 +722,13 @@ export default function Openings() {
                     <span className="shrink-0 font-mono text-xs text-zinc-400">{o.eco}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-2 text-xs text-zinc-400">
-                    <span>{o.uci.length} plies</span>
+                    <span>
+                      {o.uci.length} {o.uci.length === 1 ? "ply" : "plies"}
+                    </span>
                     {o.record ? (
                       <span>
-                        {o.record.games} games · {o.record.winRate}%
+                        {o.record.games} {o.record.games === 1 ? "game" : "games"} ·{" "}
+                        {o.record.winRate}%
                       </span>
                     ) : (
                       <span>not in your games</span>
