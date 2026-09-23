@@ -373,7 +373,7 @@ export default function Home() {
               <tr key={g.id} className="hover:bg-zinc-900/50">
                 <td className="px-3 py-2">
                   <div className="font-medium">
-                    {g.white} <span className="text-zinc-500">vs</span> {g.black}
+                    {g.white} <span className="text-zinc-400">vs</span> {g.black}
                   </div>
                   <div className="text-xs text-zinc-400">
                     you played {g.player_color === "w" ? "White" : "Black"} · {g.player_rating ?? "?"}

@@ -90,7 +90,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-sm text-zinc-300">
             Lichess API token{" "}
-            <span className="text-zinc-500">(optional — makes imports reliable)</span>
+            <span className="text-zinc-400">(optional — makes imports reliable)</span>
           </span>
           <input
             type="password"
@@ -100,7 +100,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
             autoComplete="off"
             className={field}
           />
-          <span className="mt-1 block text-xs text-zinc-500">
+          <span className="mt-1 block text-xs text-zinc-400">
             Create one at{" "}
             <a
               href="https://lichess.org/account/oauth/token"
@@ -120,7 +120,7 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
                 setTokenSaved(false);
                 setLichessToken("");
               }}
-              className="mt-1 text-xs text-zinc-500 underline hover:text-zinc-300"
+              className="mt-1 text-xs text-zinc-400 underline hover:text-zinc-200"
             >
               Clear saved token
             </button>
@@ -158,10 +158,10 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       </div>
       {message && <p className="mt-3 text-sm text-emerald-400">{message}</p>}
       {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
-      <p className="mt-3 text-xs text-zinc-500">
+      <p className="mt-3 text-xs text-zinc-400">
         Games are stored locally in SQLite. Lichess limits anonymous game exports to a few requests
-        per minute; a token above (or <code className="rounded bg-zinc-800 px-1">LICHESS_TOKEN</code>{" "}
-        in <code className="rounded bg-zinc-800 px-1">.env.local</code>) removes that friction.
+        per minute; a token above (or <code className="rounded bg-zinc-800 px-1 text-zinc-200">LICHESS_TOKEN</code>{" "}
+        in <code className="rounded bg-zinc-800 px-1 text-zinc-200">.env.local</code>) removes that friction.
       </p>
     </div>
   );

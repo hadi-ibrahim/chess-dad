@@ -18,7 +18,7 @@ export default function Nav() {
       {/* Wraps instead of overflowing: these five labels have a 421px min-content
           width, which used to push the page into horizontal scroll under 571px. */}
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex min-h-11 items-center gap-2">
           <span aria-hidden className="text-2xl">
             ♞
           </span>
