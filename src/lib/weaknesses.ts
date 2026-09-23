@@ -1,6 +1,21 @@
 import "server-only";
 import { getDb } from "./db";
 
+/**
+ * Mate scores are mapped to +/-100000 centipawns, so a single missed mate
+ * dominates any mean. Every aggregate here clamps a move's loss before it is
+ * averaged, and the phase verdict uses error rate rather than a mean of
+ * arbitrary magnitudes.
+ */
+const CP_CLAMP = 1000;
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 export interface ClassificationCounts {
   best: number;
   great: number;
@@ -19,7 +34,12 @@ export interface PhaseStat {
   blunders: number;
   mistakes: number;
   inaccuracies: number;
+  misses: number;
+  /** Flagged moves (blunder + mistake + miss) per 100 moves — the robust ranking basis. */
+  errorsPer100: number;
+  /** Mean loss, clamped at 1000 cp per move so mate scores cannot dominate. */
   avgCpLoss: number;
+  medianCpLoss: number;
 }
 
 export interface OpeningStat {
@@ -41,8 +61,8 @@ export interface WeaknessProfile {
   phase: Record<string, PhaseStat>;
   motifs: { motif: string; count: number }[];
   timeManagement: {
-    lowTime: { moves: number; avgCpLoss: number };
-    normalTime: { moves: number; avgCpLoss: number };
+    lowTime: { moves: number; avgCpLoss: number; medianCpLoss: number };
+    normalTime: { moves: number; avgCpLoss: number; medianCpLoss: number };
   };
   openings: OpeningStat[];
   color: {
@@ -80,8 +100,8 @@ function emptyProfile(totalGames: number, analyzedGames: number): WeaknessProfil
     phase: {},
     motifs: [],
     timeManagement: {
-      lowTime: { moves: 0, avgCpLoss: 0 },
-      normalTime: { moves: 0, avgCpLoss: 0 },
+      lowTime: { moves: 0, avgCpLoss: 0, medianCpLoss: 0 },
+      normalTime: { moves: 0, avgCpLoss: 0, medianCpLoss: 0 },
     },
     openings: [],
     color: {
@@ -153,14 +173,13 @@ export function computeWeaknesses(): WeaknessProfile {
     .all() as unknown as Row[];
 
   const motifCounts = new Map<string, number>();
-  const phaseAgg = new Map<string, { moves: number; blunders: number; mistakes: number; inaccuracies: number; cpSum: number }>();
+  const phaseAgg = new Map<
+    string,
+    { moves: number; blunders: number; mistakes: number; inaccuracies: number; misses: number; cp: number[] }
+  >();
   const openingAgg = new Map<string, OpeningStat>();
-  let lowTimeMoves = 0;
-  let lowTimeCp = 0;
-  let normalTimeMoves = 0;
-  let normalTimeCp = 0;
-  let accSum = 0;
-  let accCount = 0;
+  const lowTimeCp: number[] = [];
+  const normalTimeCp: number[] = [];
 
   for (const r of rows) {
     profile.totalPlayerMoves += 1;
@@ -172,23 +191,26 @@ export function computeWeaknesses(): WeaknessProfile {
     }
 
     const phase = r.phase ?? "middlegame";
-    const pa = phaseAgg.get(phase) ?? { moves: 0, blunders: 0, mistakes: 0, inaccuracies: 0, cpSum: 0 };
+    const pa = phaseAgg.get(phase) ?? {
+      moves: 0,
+      blunders: 0,
+      mistakes: 0,
+      inaccuracies: 0,
+      misses: 0,
+      cp: [],
+    };
     pa.moves += 1;
     if (r.classification === "blunder") pa.blunders += 1;
     if (r.classification === "mistake") pa.mistakes += 1;
     if (r.classification === "inaccuracy") pa.inaccuracies += 1;
-    if (r.centipawn_loss != null) pa.cpSum += r.centipawn_loss;
+    if (r.classification === "miss") pa.misses += 1;
+    if (r.centipawn_loss != null) pa.cp.push(Math.min(r.centipawn_loss, CP_CLAMP));
     phaseAgg.set(phase, pa);
 
     // Time management: "low time" = under 30 seconds remaining.
     if (r.clock_seconds != null) {
-      if (r.clock_seconds < 30) {
-        lowTimeMoves += 1;
-        lowTimeCp += r.centipawn_loss ?? 0;
-      } else {
-        normalTimeMoves += 1;
-        normalTimeCp += r.centipawn_loss ?? 0;
-      }
+      if (r.clock_seconds < 30) lowTimeCp.push(Math.min(r.centipawn_loss ?? 0, CP_CLAMP));
+      else normalTimeCp.push(Math.min(r.centipawn_loss ?? 0, CP_CLAMP));
     }
 
     // Opening performance (aggregate accuracy across the game's opening key).
@@ -205,10 +227,6 @@ export function computeWeaknesses(): WeaknessProfile {
     };
     openingAgg.set(eco, oa);
 
-    if (r.accuracy != null) {
-      accSum += r.accuracy;
-      accCount += 1;
-    }
   }
 
   // Opening games/win-rate from the game table (once per game, not per move).
@@ -232,12 +250,17 @@ export function computeWeaknesses(): WeaknessProfile {
 
   profile.phase = {};
   for (const [phase, v] of phaseAgg) {
+    const errors = v.blunders + v.mistakes + v.misses;
+    const cpSum = v.cp.reduce((a, b) => a + b, 0);
     profile.phase[phase] = {
       moves: v.moves,
       blunders: v.blunders,
       mistakes: v.mistakes,
       inaccuracies: v.inaccuracies,
-      avgCpLoss: v.moves ? v.cpSum / v.moves : 0,
+      misses: v.misses,
+      errorsPer100: v.moves ? Number(((errors / v.moves) * 100).toFixed(1)) : 0,
+      avgCpLoss: v.cp.length ? cpSum / v.cp.length : 0,
+      medianCpLoss: median(v.cp),
     };
   }
 
@@ -247,12 +270,14 @@ export function computeWeaknesses(): WeaknessProfile {
 
   profile.timeManagement = {
     lowTime: {
-      moves: lowTimeMoves,
-      avgCpLoss: lowTimeMoves ? lowTimeCp / lowTimeMoves : 0,
+      moves: lowTimeCp.length,
+      avgCpLoss: lowTimeCp.length ? lowTimeCp.reduce((a, b) => a + b, 0) / lowTimeCp.length : 0,
+      medianCpLoss: median(lowTimeCp),
     },
     normalTime: {
-      moves: normalTimeMoves,
-      avgCpLoss: normalTimeMoves ? normalTimeCp / normalTimeMoves : 0,
+      moves: normalTimeCp.length,
+      avgCpLoss: normalTimeCp.length ? normalTimeCp.reduce((a, b) => a + b, 0) / normalTimeCp.length : 0,
+      medianCpLoss: median(normalTimeCp),
     },
   };
 
@@ -281,12 +306,18 @@ export function computeWeaknesses(): WeaknessProfile {
     return { ...o, avgAccuracy: a && a.n ? a.sum / a.n : 0 };
   });
 
+  // Accuracy is a per-game rating, so average it per game rather than per move.
+  const gameAccuracies = games.map((g) => (g.accuracy == null ? null : Number(g.accuracy))).filter((a): a is number => a != null);
+  // Phase verdict: error rate first (robust), then median loss as the tiebreak.
+  const weakest = [...Object.entries(profile.phase)].sort(
+    (a, b) => b[1].errorsPer100 - a[1].errorsPer100 || b[1].medianCpLoss - a[1].medianCpLoss
+  )[0];
+
   profile.summary = {
-    avgAccuracy: accCount ? accSum / accCount : null,
+    avgAccuracy: gameAccuracies.length ? gameAccuracies.reduce((a, b) => a + b, 0) / gameAccuracies.length : null,
     blunderRate: analyzedGames ? profile.classification.blunder / analyzedGames : 0,
     mostCommonMotif: profile.motifs[0]?.motif ?? null,
-    weakestPhase:
-      [...Object.entries(profile.phase)].sort((a, b) => b[1].avgCpLoss - a[1].avgCpLoss)[0]?.[0] ?? null,
+    weakestPhase: weakest?.[0] ?? null,
   };
 
   return profile;

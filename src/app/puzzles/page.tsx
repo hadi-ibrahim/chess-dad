@@ -147,6 +147,17 @@ export default function Puzzles() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the library's identity, not its SRS counters
   }, [category, dueOnly, puzzles.length, loading]);
 
+  // Deep link from an insight ("drill these"): ?theme=hung-piece preselects a
+  // category. Read from the URL after mount so static prerendering is untouched.
+  useEffect(() => {
+    if (puzzles.length === 0) return;
+    const theme = new URLSearchParams(window.location.search).get("theme");
+    if (!theme || !puzzles.some((p) => themeKey(p) === theme)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the deep link preselects a category once the library loads
+    setCategory(theme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the library first loads
+  }, [puzzles.length]);
+
   const counts = useMemo(() => {
     const byCategory: Record<string, number> = {};
     let due = 0;
