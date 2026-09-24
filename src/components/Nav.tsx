@@ -6,19 +6,20 @@ import { usePathname } from "next/navigation";
 
 export default function Nav() {
   const pathname = usePathname();
+  // Profiles leads: it decides whose games every other tab is showing.
   const links = [
+    { href: "/profiles", label: "Profiles" },
     { href: "/", label: "Games" },
     { href: "/insights", label: "Insights" },
     { href: "/puzzles", label: "Puzzles" },
     { href: "/openings", label: "Openings" },
     { href: "/knowledge", label: "Knowledge" },
-    { href: "/profiles", label: "Profiles" },
   ];
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
-      {/* Wraps instead of overflowing: these five labels have a 421px min-content
-          width, which used to push the page into horizontal scroll under 571px. */}
+      {/* Wraps instead of overflowing: six labels have a wide min-content width,
+          which used to push the page into horizontal scroll on narrow screens. */}
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5">
         <Link href="/" className="flex min-h-11 items-center gap-2">
           {/* Decorative: the wordmark beside it already names the app. */}

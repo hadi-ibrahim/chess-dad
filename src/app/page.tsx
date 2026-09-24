@@ -59,6 +59,7 @@ export default function Home() {
   const [pending, setPending] = useState(0);
   const [queuedIds, setQueuedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [activeProfile, setActiveProfile] = useState<{ id: number; display_name: string; lichess_username: string; chesscom_username: string } | null>(null);
 
   // Filters
   const [q, setQ] = useState("");
@@ -136,6 +137,7 @@ export default function Home() {
     const data = await gamesRes.json();
     const status = await statusRes.json();
 
+    setActiveProfile((data.profile as typeof activeProfile) ?? null);
     setGames((data.games as Game[]) || []);
     setTotal(Number(data.total ?? 0));
     setAnalyzedInView(Number(data.analyzed ?? 0));
@@ -204,12 +206,35 @@ export default function Home() {
     [pageCount]
   );
 
+  // Every game belongs to a profile, so without one there is no library to show
+  // and nothing to import for.
+  if (!loading && activeProfile === null) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold tracking-tight">Your games</h1>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
+          <p className="text-zinc-200">No profile is active.</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-zinc-400">
+            Games belong to a profile, so add one first. After that this tab imports and
+            analyses for whoever is active.
+          </p>
+          <Link
+            href="/profiles"
+            className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+          >
+            Go to Profiles
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Your games</h1>
         <p className="text-sm text-zinc-400">
-          Import from Lichess &amp; Chess.com, then queue them for Stockfish analysis — the app stays
+          Imported for the active profile and queued for Stockfish analysis — the app stays
           usable while games are processed in the background.
         </p>
       </div>

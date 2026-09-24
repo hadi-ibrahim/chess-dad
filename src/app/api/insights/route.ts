@@ -9,7 +9,10 @@ export async function GET(request: Request) {
   const window = (PROFILE_WINDOWS as string[]).includes(raw) ? (raw as ProfileWindow) : "all";
   const profileId = activeProfileId(request);
   if (profileId == null) {
-    return NextResponse.json({ error: "No profile selected." }, { status: 404 });
+    return NextResponse.json(
+      { error: "No profile is active. Add one on the Profiles tab." },
+      { status: 409 }
+    );
   }
   return NextResponse.json({ ...computeWeaknesses(window, profileId), window });
 }

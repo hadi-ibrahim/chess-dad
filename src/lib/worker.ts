@@ -4,7 +4,7 @@ import { analyzeGame } from "./analysis";
 import { importLichess } from "./importers/lichess";
 import { importChessCom } from "./importers/chesscom";
 import { writeProgressBundle } from "./okf-progress";
-import { filterUnanalyzedWithMoves, getGame, getSetting } from "./db";
+import { filterUnanalyzedWithMoves, getGame, getProfileToken } from "./db";
 import {
   claimNextJob,
   completeJob,
@@ -168,7 +168,9 @@ async function runImportJob(job: Job): Promise<Record<string, unknown>> {
           p.username,
           p.max,
           p.profileId,
-          getSetting("lichess_token") || undefined,
+          // The token now lives on the profile; config is only a deployment-wide
+          // fallback. Reading the old global setting silently dropped it.
+          getProfileToken(p.profileId) || config.lichessToken || undefined,
           onProgress
         )
       : await importChessCom(p.username, p.max, p.profileId, onProgress);

@@ -297,12 +297,8 @@ function migrateMultiProfile(db: DatabaseSync): void {
     db.prepare("DELETE FROM settings WHERE key = 'lichess_token'").run();
   }
 
-  // The app has always presented one always-present profile; keep that so a fresh
-  // install opens on something selectable rather than an empty picker.
-  const any = db.prepare("SELECT COUNT(*) AS n FROM profiles").get() as { n: number };
-  if (Number(any?.n ?? 0) === 0) {
-    db.prepare("INSERT INTO profiles (lichess_username, chesscom_username) VALUES ('', '')").run();
-  }
+  // Deliberately no auto-created profile: profiles are added on the Profiles tab,
+  // and the Games tab has a clear "no profile is active" state until one exists.
 }
 
 // Reuse a single connection across hot reloads / route invocations.

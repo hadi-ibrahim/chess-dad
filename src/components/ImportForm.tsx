@@ -1,37 +1,54 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 
+interface ActiveProfile {
+  id: number;
+  lichess_username: string;
+  chesscom_username: string;
+  display_name: string;
+  games: number;
+  analyzed: number;
+  lichessTokenSet: boolean;
+}
+
+function label(p: ActiveProfile): string {
+  return p.display_name || p.lichess_username || p.chesscom_username || `Profile ${p.id}`;
+}
+
+/**
+ * The Games tab's only import control.
+ *
+ * Profiles are added on the Profiles tab — this panel never asks for a username.
+ * It imports for whoever is active, reading their linked accounts and stored
+ * token server-side, so the action is one button.
+ */
 export default function ImportForm({ onImported }: { onImported: () => void }) {
-  const [lichess, setLichess] = useState("");
-  const [chesscom, setChesscom] = useState("");
-  const [lichessToken, setLichessToken] = useState("");
-  const [tokenSaved, setTokenSaved] = useState(false);
-  const [max, setMax] = useState(100);
-  const [analyzeAfter, setAnalyzeAfter] = useState(true);
+  const [profile, setProfile] = useState<ActiveProfile | null>(null);
+  const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d) => {
-        setTokenSaved(Boolean(d.lichessTokenSet));
-        // Prefill from the acting profile so nobody retypes their own username.
-        if (d.profile) {
-          setLichess((v) => v || d.profile.lichess_username || "");
-          setChesscom((v) => v || d.profile.chesscom_username || "");
-        }
-      })
-      .catch(() => {});
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const d = await res.json();
+      setProfile((d.profile as ActiveProfile) ?? null);
+    } catch {
+      setProfile(null);
+    } finally {
+      setReady(true);
+    }
   }, []);
 
-  async function submit() {
-    if (!lichess.trim() && !chesscom.trim()) {
-      setError("Enter a Lichess and/or Chess.com username.");
-      return;
-    }
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch on mount
+    void load();
+  }, [load]);
+
+  async function runImport() {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -39,137 +56,108 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
       const res = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lichess, chesscom, max, lichessToken, analyzeAfter }),
+        body: JSON.stringify({}),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Could not queue the import");
-      } else {
-        const jobs = (data.importJobs || []) as { source: string; username: string; skipped: boolean }[];
-        const queued = jobs.filter((j) => !j.skipped);
-        const skipped = jobs.length - queued.length;
-        if (queued.length > 0) {
-          const names = queued.map((j) => `${j.source}: ${j.username}`).join(" · ");
-          setMessage(
-            `Queued ${names}${analyzeAfter ? " — analysis will follow automatically" : ""}` +
-              `${skipped > 0 ? ` (${skipped} already queued)` : ""}. Watch the queue panel.`
-          );
-        } else {
-          setMessage("Those imports are already queued.");
-        }
-        if (lichessToken.trim()) setTokenSaved(true);
-        onImported();
-      }
-    } catch {
-      setError("Network error during import.");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? `Import failed (${res.status})`);
+      const queued = Number(body.queued ?? 0);
+      setMessage(
+        queued === 0
+          ? "Those accounts are already being imported."
+          : `Queued ${queued} import${queued === 1 ? "" : "s"} — games appear as they arrive.`
+      );
+      await load();
+      onImported();
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
 
-  const field =
-    "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
+  if (!ready) {
+    return (
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
+        Loading your profile…
+      </section>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm">
+        <p className="text-zinc-200">No profile is active.</p>
+        <p className="mt-1 text-zinc-400">
+          Games belong to a profile. Add one and the app will import for whoever is active.
+        </p>
+        <Link
+          href="/profiles"
+          className="mt-3 inline-flex min-h-11 items-center rounded-lg bg-indigo-600 px-4 font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+        >
+          Go to Profiles
+        </Link>
+      </section>
+    );
+  }
+
+  const accounts = [profile.lichess_username, profile.chesscom_username].filter(Boolean);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-zinc-400">
-        Import your games
-      </h2>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1 block text-sm text-zinc-300">Lichess username</span>
-          <input
-            value={lichess}
-            onChange={(e) => setLichess(e.target.value)}
-            placeholder="e.g. Rooronoa"
-            className={field}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-sm text-zinc-300">Chess.com username</span>
-          <input
-            value={chesscom}
-            onChange={(e) => setChesscom(e.target.value)}
-            placeholder="e.g. Rooronoa_HaD"
-            className={field}
-          />
-        </label>
-        <label className="block sm:col-span-2">
-          <span className="mb-1 block text-sm text-zinc-300">
-            Lichess API token{" "}
-            <span className="text-zinc-400">(optional — makes imports reliable)</span>
-          </span>
-          <input
-            type="password"
-            value={lichessToken}
-            onChange={(e) => setLichessToken(e.target.value)}
-            placeholder={tokenSaved ? "A token is saved — leave blank to reuse it" : "Paste a personal API token"}
-            autoComplete="off"
-            className={field}
-          />
-          <span className="mt-1 block text-xs text-zinc-400">
-            Create one at{" "}
-            <a
-              href="https://lichess.org/account/oauth/token"
-              target="_blank"
-              rel="noreferrer"
-              className="text-indigo-400 hover:underline"
-            >
-              lichess.org/account/oauth/token
-            </a>{" "}
-            (no scopes required to read public games). Stored locally in your database.
-          </span>
-          {tokenSaved && (
-            <button
-              type="button"
-              onClick={async () => {
-                await fetch("/api/settings", { method: "DELETE" });
-                setTokenSaved(false);
-                setLichessToken("");
-              }}
-              className="mt-1 text-xs text-zinc-400 underline hover:text-zinc-200"
-            >
-              Clear saved token
-            </button>
-          )}
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-sm text-zinc-300">Games per site (max {max})</span>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={max}
-            onChange={(e) => setMax(Number(e.target.value))}
-            className={field}
-          />
-        </label>
-        <label className="flex items-center gap-2 text-sm text-zinc-300 sm:col-span-2">
-          <input
-            type="checkbox"
-            checked={analyzeAfter}
-            onChange={(e) => setAnalyzeAfter(e.target.checked)}
-            className="h-4 w-4 accent-indigo-500"
-          />
-          Analyze the imported games automatically
-        </label>
-        <div className="flex items-end sm:col-span-2">
-          <button
-            onClick={submit}
-            disabled={busy}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
+            Importing as
+          </h2>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-semibold text-zinc-100">{label(profile)}</span>
+            {accounts.map((a) => (
+              <span key={a} className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300">
+                {a}
+              </span>
+            ))}
+            <span className="text-xs text-zinc-400">
+              {profile.games} game{profile.games === 1 ? "" : "s"}
+              {profile.analyzed ? `, ${profile.analyzed} analysed` : ""}
+              {profile.lichessTokenSet ? " · token saved" : ""}
+            </span>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/profiles"
+            className="inline-flex min-h-11 items-center rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
           >
-            {busy ? "Queueing…" : "Import games"}
+            Switch profile
+          </Link>
+          <button
+            type="button"
+            onClick={runImport}
+            disabled={busy || accounts.length === 0}
+            className="min-h-11 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+          >
+            {busy ? "Importing…" : profile.games > 0 ? "Re-import games" : "Import games"}
           </button>
         </div>
       </div>
-      {message && <p className="mt-3 text-sm text-emerald-400">{message}</p>}
-      {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
-      <p className="mt-3 text-xs text-zinc-400">
-        Games are stored locally in SQLite. Lichess limits anonymous game exports to a few requests
-        per minute; a token above (or <code className="rounded bg-zinc-800 px-1 text-zinc-200">LICHESS_TOKEN</code>{" "}
-        in <code className="rounded bg-zinc-800 px-1 text-zinc-200">.env.local</code>) removes that friction.
-      </p>
-    </div>
+
+      {accounts.length === 0 ? (
+        <p className="mt-3 text-sm text-amber-200">
+          This profile has no accounts yet.{" "}
+          <Link href="/profiles" className="underline hover:text-amber-100">
+            Add a Lichess or Chess.com username
+          </Link>{" "}
+          and the import button will light up.
+        </p>
+      ) : null}
+
+      {message ? <p className="mt-3 text-sm text-emerald-300">{message}</p> : null}
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-rose-300">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
