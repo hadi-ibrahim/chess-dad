@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { getOpeningEntries, findOpening, detectDeviation } from "@/lib/openings";
+import { activeProfileId } from "@/lib/active-profile";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return NextResponse.json({ openings: getOpeningEntries() });
+export async function GET(request: Request) {
+  const profileId = activeProfileId(request);
+  return NextResponse.json({ openings: profileId == null ? [] : getOpeningEntries(profileId) });
 }
 
 export async function POST(request: Request) {

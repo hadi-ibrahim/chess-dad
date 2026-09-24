@@ -16,7 +16,14 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
   useEffect(() => {
     void fetch("/api/settings")
       .then((r) => r.json())
-      .then((d) => setTokenSaved(Boolean(d.lichessTokenSet)))
+      .then((d) => {
+        setTokenSaved(Boolean(d.lichessTokenSet));
+        // Prefill from the acting profile so nobody retypes their own username.
+        if (d.profile) {
+          setLichess((v) => v || d.profile.lichess_username || "");
+          setChesscom((v) => v || d.profile.chesscom_username || "");
+        }
+      })
       .catch(() => {});
   }, []);
 

@@ -24,6 +24,8 @@ export interface AnalyzePayload {
 export interface ImportPayload {
   source: "lichess" | "chesscom";
   username: string;
+  /** Which library the fetched games belong to. */
+  profileId: number;
   max: number;
   /** Queue analysis for the newly imported games once this job finishes. */
   analyzeAfter: boolean;
@@ -189,6 +191,7 @@ export function enqueueImportJob(
   source: "lichess" | "chesscom",
   username: string,
   max: number,
+  profileId: number,
   opts: { analyzeAfter?: boolean } = {}
 ): { jobId: number | null; skipped: boolean } {
   const db = getDb();
@@ -198,14 +201,16 @@ export function enqueueImportJob(
        WHERE type='import' AND status IN ('queued','running')
          AND json_extract(payload, '$.source') = ?
          AND lower(json_extract(payload, '$.username')) = lower(?)
+         AND json_extract(payload, '$.profileId') = ?
        LIMIT 1`
     )
-    .get(source, username) as { id: number } | undefined;
+    .get(source, username, profileId) as { id: number } | undefined;
   if (existing) return { jobId: Number(existing.id), skipped: true };
 
   const payload: ImportPayload = {
     source,
     username,
+    profileId,
     max,
     analyzeAfter: opts.analyzeAfter !== false,
   };

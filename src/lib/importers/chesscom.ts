@@ -5,7 +5,7 @@ import { parsePgn } from "../chess-core";
 import { upsertGame, insertPositionIfMissing } from "../db";
 import { fetchWithBackoff, USER_AGENT } from "../http";
 
-export interface ImportedGame extends NewGame {
+export interface ImportedGame extends Omit<NewGame, "profile_id"> {
   plies: PlyInfo[];
 }
 
@@ -122,6 +122,7 @@ export async function fetchChessComGames(
 export async function importChessCom(
   username: string,
   max: number,
+  profileId: number,
   onProgress?: (info: JobProgress) => void
 ): Promise<{ username: string; count: number; gameIds: number[] }> {
   onProgress?.({ stage: "fetching", progress: 0.05 });
@@ -132,6 +133,7 @@ export async function importChessCom(
   for (let i = 0; i < games.length; i++) {
     const g = games[i];
     const gameId = upsertGame({
+      profile_id: profileId,
       source: g.source,
       external_id: g.external_id,
       pgn: g.pgn,

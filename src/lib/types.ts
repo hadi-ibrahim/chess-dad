@@ -16,6 +16,8 @@ export type MoveClass =
 
 export interface GameRow {
   id: number;
+  /** Owning profile. */
+  profile_id: number;
   source: Source;
   external_id: string | null;
   pgn: string;

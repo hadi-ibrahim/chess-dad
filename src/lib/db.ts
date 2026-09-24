@@ -8,6 +8,9 @@ import type { GameRow, PositionRow, PuzzleRow } from "./types";
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS games (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- Every game belongs to exactly one profile. Without this the whole library is
+  -- a single shared pool and each dashboard silently blends every user's games.
+  profile_id INTEGER NOT NULL DEFAULT 1,
   source TEXT NOT NULL,
   external_id TEXT,
   pgn TEXT NOT NULL,
@@ -29,7 +32,10 @@ CREATE TABLE IF NOT EXISTS games (
   analyzed INTEGER NOT NULL DEFAULT 0,
   accuracy REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(source, external_id)
+  -- Scoped by profile: two people who played each other both import the same
+  -- game, and the pre-profile key let the second import overwrite the first
+  -- player's colour, opponent and rating.
+  UNIQUE(profile_id, source, external_id)
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -59,11 +65,6 @@ CREATE TABLE IF NOT EXISTS positions (
   UNIQUE(game_id, ply)
 );
 
-CREATE INDEX IF NOT EXISTS idx_positions_game ON positions(game_id, ply);
-CREATE INDEX IF NOT EXISTS idx_games_analyzed ON games(analyzed);
-CREATE INDEX IF NOT EXISTS idx_games_played ON games(played_at DESC);
-CREATE INDEX IF NOT EXISTS idx_games_source ON games(source);
-
 CREATE TABLE IF NOT EXISTS puzzles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   game_id INTEGER NOT NULL,
@@ -82,7 +83,8 @@ CREATE TABLE IF NOT EXISTS puzzles (
 );
 
 CREATE TABLE IF NOT EXISTS opening_reviews (
-  eco TEXT PRIMARY KEY,
+  profile_id INTEGER NOT NULL DEFAULT 1,
+  eco TEXT NOT NULL,
   ease REAL NOT NULL DEFAULT 2.5,
   interval_days REAL NOT NULL DEFAULT 0,
   repetitions INTEGER NOT NULL DEFAULT 0,
@@ -90,7 +92,8 @@ CREATE TABLE IF NOT EXISTS opening_reviews (
   clean_count INTEGER NOT NULL DEFAULT 0,
   miss_count INTEGER NOT NULL DEFAULT 0,
   last_reviewed_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (profile_id, eco)
 );
 
 CREATE TABLE IF NOT EXISTS llm_cache (
@@ -113,9 +116,19 @@ CREATE TABLE IF NOT EXISTS engine_cache (
 );
 
 CREATE TABLE IF NOT EXISTS profiles (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   lichess_username TEXT,
   chesscom_username TEXT,
+  display_name TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Kept separate from the profiles table on purpose: a token must never ride
+-- along on a row that a listing endpoint might serialise.
+CREATE TABLE IF NOT EXISTS profile_secrets (
+  profile_id INTEGER PRIMARY KEY,
+  lichess_token TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -144,9 +157,153 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT
 );
 
+`;
+
+/*
+ * Indexes live apart from SCHEMA because rebuilding a table drops its indexes;
+ * this block is idempotent and runs after every migration.
+ */
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_positions_game ON positions(game_id, ply);
+CREATE INDEX IF NOT EXISTS idx_games_analyzed ON games(analyzed);
+CREATE INDEX IF NOT EXISTS idx_games_played ON games(played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_games_source ON games(source);
+CREATE INDEX IF NOT EXISTS idx_games_profile ON games(profile_id, played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_puzzles_game ON puzzles(game_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority, id);
 CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(type);
 `;
+
+// Column lists shared by the migration's copy statements, so a rebuild can never
+// silently misalign old and new ordering.
+const GAME_COLUMNS = [
+  "id", "profile_id", "source", "external_id", "pgn", "white", "black",
+  "white_rating", "black_rating", "result", "time_control", "speed", "eco",
+  "opening_name", "played_at", "player_color", "player_rating", "opponent",
+  "opponent_rating", "total_plies", "analyzed", "accuracy", "created_at",
+];
+
+/**
+ * Upgrade a pre-profile database in place.
+ *
+ * Everything that existed before profiles belonged to the one user who was using
+ * the app, so it is attributed to profile 1 — which the old schema guaranteed
+ * was the only row. Each rebuild copies ids verbatim so `positions.game_id` and
+ * `puzzles.game_id` keep pointing at the right games.
+ */
+function migrateMultiProfile(db: DatabaseSync): void {
+  const tableSql = (name: string): string =>
+    String(
+      (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(name) as
+        | { sql?: string }
+        | undefined)?.sql ?? ""
+    );
+  const columns = (name: string): string[] =>
+    (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[]).map((c) => c.name);
+
+  // profiles: the old table was pinned to a single row by CHECK (id = 1).
+  if (tableSql("profiles").includes("CHECK (id = 1)")) {
+    db.exec(`
+      ALTER TABLE profiles RENAME TO profiles_singleton;
+      CREATE TABLE profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lichess_username TEXT,
+        chesscom_username TEXT,
+        display_name TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO profiles (id, lichess_username, chesscom_username, updated_at)
+        SELECT id, lichess_username, chesscom_username, updated_at FROM profiles_singleton;
+      DROP TABLE profiles_singleton;
+    `);
+  }
+
+  // games: gains profile_id and a profile-scoped uniqueness key.
+  const gameCols = columns("games");
+  if (gameCols.length > 0 && !gameCols.includes("profile_id")) {
+    db.exec(`
+      ALTER TABLE games RENAME TO games_pre_profile;
+      CREATE TABLE games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL DEFAULT 1,
+        source TEXT NOT NULL,
+        external_id TEXT,
+        pgn TEXT NOT NULL,
+        white TEXT NOT NULL,
+        black TEXT NOT NULL,
+        white_rating INTEGER,
+        black_rating INTEGER,
+        result TEXT NOT NULL DEFAULT '*',
+        time_control TEXT,
+        speed TEXT,
+        eco TEXT,
+        opening_name TEXT,
+        played_at TEXT,
+        player_color TEXT NOT NULL,
+        player_rating INTEGER,
+        opponent TEXT,
+        opponent_rating INTEGER,
+        total_plies INTEGER NOT NULL DEFAULT 0,
+        analyzed INTEGER NOT NULL DEFAULT 0,
+        accuracy REAL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(profile_id, source, external_id)
+      );
+      INSERT INTO games (${GAME_COLUMNS.join(", ")})
+        SELECT ${GAME_COLUMNS.map((c) => (c === "profile_id" ? "1" : c)).join(", ")}
+        FROM games_pre_profile;
+      DROP TABLE games_pre_profile;
+    `);
+  }
+
+  // opening_reviews: review schedules are per player, not global.
+  const reviewCols = columns("opening_reviews");
+  if (reviewCols.length > 0 && !reviewCols.includes("profile_id")) {
+    db.exec(`
+      ALTER TABLE opening_reviews RENAME TO opening_reviews_global;
+      CREATE TABLE opening_reviews (
+        profile_id INTEGER NOT NULL DEFAULT 1,
+        eco TEXT NOT NULL,
+        ease REAL NOT NULL DEFAULT 2.5,
+        interval_days REAL NOT NULL DEFAULT 0,
+        repetitions INTEGER NOT NULL DEFAULT 0,
+        due_at TEXT,
+        clean_count INTEGER NOT NULL DEFAULT 0,
+        miss_count INTEGER NOT NULL DEFAULT 0,
+        last_reviewed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (profile_id, eco)
+      );
+      INSERT INTO opening_reviews
+        (profile_id, eco, ease, interval_days, repetitions, due_at, clean_count, miss_count, last_reviewed_at, created_at)
+        SELECT 1, eco, ease, interval_days, repetitions, due_at, clean_count, miss_count, last_reviewed_at, created_at
+        FROM opening_reviews_global;
+      DROP TABLE opening_reviews_global;
+    `);
+  }
+
+  // The one global Lichess token becomes profile 1's secret.
+  const legacyToken = db
+    .prepare("SELECT value FROM settings WHERE key = 'lichess_token'")
+    .get() as { value?: string } | undefined;
+  if (legacyToken?.value) {
+    db.prepare(
+      `INSERT INTO profile_secrets (profile_id, lichess_token, updated_at)
+       VALUES (1, ?, datetime('now'))
+       ON CONFLICT(profile_id) DO UPDATE SET
+         lichess_token = excluded.lichess_token, updated_at = excluded.updated_at`
+    ).run(legacyToken.value);
+    db.prepare("DELETE FROM settings WHERE key = 'lichess_token'").run();
+  }
+
+  // The app has always presented one always-present profile; keep that so a fresh
+  // install opens on something selectable rather than an empty picker.
+  const any = db.prepare("SELECT COUNT(*) AS n FROM profiles").get() as { n: number };
+  if (Number(any?.n ?? 0) === 0) {
+    db.prepare("INSERT INTO profiles (lichess_username, chesscom_username) VALUES ('', '')").run();
+  }
+}
 
 // Reuse a single connection across hot reloads / route invocations.
 const globalForDb = globalThis as unknown as { __chessdadDb?: DatabaseSync };
@@ -159,6 +316,9 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   migrateLegacyQueue(db);
+  migrateMultiProfile(db);
+  // Re-assert indexes: a rebuild above drops the ones attached to the old table.
+  db.exec(INDEXES);
   globalForDb.__chessdadDb = db;
   return db;
 }
@@ -194,6 +354,7 @@ function migrateLegacyQueue(db: DatabaseSync): void {
 function toGameRow(r: Record<string, unknown>): GameRow {
   return {
     id: Number(r.id),
+    profile_id: Number(r.profile_id ?? 1),
     source: r.source as GameRow["source"],
     external_id: r.external_id as string | null,
     pgn: String(r.pgn ?? ""),
@@ -255,6 +416,8 @@ function toPositionRow(r: Record<string, unknown>): PositionRow {
 // ---------- Games ----------
 
 export interface NewGame {
+  /** Owner. Every game belongs to exactly one profile. */
+  profile_id: number;
   source: GameRow["source"];
   external_id: string | null;
   pgn: string;
@@ -279,11 +442,11 @@ export function upsertGame(g: NewGame): number {
   const db = getDb();
   db.prepare(
     `INSERT INTO games (
-      source, external_id, pgn, white, black, white_rating, black_rating,
+      profile_id, source, external_id, pgn, white, black, white_rating, black_rating,
       result, time_control, speed, eco, opening_name, played_at,
       player_color, player_rating, opponent, opponent_rating, total_plies
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(source, external_id) DO UPDATE SET
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(profile_id, source, external_id) DO UPDATE SET
       pgn=excluded.pgn, white=excluded.white, black=excluded.black,
       white_rating=excluded.white_rating, black_rating=excluded.black_rating,
       result=excluded.result, time_control=excluded.time_control,
@@ -292,6 +455,7 @@ export function upsertGame(g: NewGame): number {
       player_rating=excluded.player_rating, opponent=excluded.opponent,
       opponent_rating=excluded.opponent_rating, total_plies=excluded.total_plies`
   ).run(
+    g.profile_id,
     g.source,
     g.external_id ?? "",
     g.pgn,
@@ -314,8 +478,8 @@ export function upsertGame(g: NewGame): number {
 
   // With ON CONFLICT DO UPDATE the insert reports an unreliable rowid, so re-select.
   const row = db
-    .prepare("SELECT id FROM games WHERE source = ? AND external_id = ?")
-    .get(g.source, g.external_id ?? "") as { id: number } | undefined;
+    .prepare("SELECT id FROM games WHERE profile_id = ? AND source = ? AND external_id = ?")
+    .get(g.profile_id, g.source, g.external_id ?? "") as { id: number } | undefined;
   return Number(row?.id ?? 0);
 }
 
@@ -339,6 +503,8 @@ export function deleteGame(id: number): void {
 }
 
 export interface GameQuery {
+  /** Whose library to query. Always required: an unscoped list would blend users. */
+  profileId: number;
   /** Free-text search over players, opening name and ECO. */
   q?: string;
   source?: string;
@@ -366,8 +532,9 @@ export interface GameQueryResult {
 /** Paginated, searchable, filterable view of the games table. */
 export function queryGames(query: GameQuery): GameQueryResult {
   const db = getDb();
-  const where: string[] = [];
-  const params: (string | number)[] = [];
+  // The profile predicate is seeded first so no code path can build an unscoped query.
+  const where: string[] = ["profile_id = ?"];
+  const params: (string | number)[] = [query.profileId];
 
   if (query.q && query.q.trim()) {
     const like = `%${query.q.trim().toLowerCase()}%`;
@@ -628,20 +795,34 @@ export function insertPuzzle(p: Omit<PuzzleRow, "id" | "ease" | "interval_days" 
   return Number(info.lastInsertRowid);
 }
 
-export function puzzleExists(fen: string): boolean {
-  const r = getDb().prepare("SELECT 1 FROM puzzles WHERE fen = ? LIMIT 1").get(fen);
+export function puzzleExists(fen: string, profileId: number): boolean {
+  const r = getDb()
+    .prepare(
+      `SELECT 1 FROM puzzles z JOIN games g ON g.id = z.game_id
+       WHERE z.fen = ? AND g.profile_id = ? LIMIT 1`
+    )
+    .get(fen, profileId);
   return !!r;
 }
 
-export function listPuzzles(): PuzzleRow[] {
+/** Scoped through the owning game, so puzzles never leak across profiles. */
+export function listPuzzles(profileId: number): PuzzleRow[] {
   return getDb()
-    .prepare("SELECT * FROM puzzles ORDER BY due_at IS NULL, due_at ASC, id ASC")
-    .all()
+    .prepare(
+      `SELECT z.* FROM puzzles z JOIN games g ON g.id = z.game_id
+       WHERE g.profile_id = ?
+       ORDER BY z.due_at IS NULL, z.due_at ASC, z.id ASC`
+    )
+    .all(profileId)
     .map((r) => toPuzzleRow(r as Record<string, unknown>));
 }
 
-export function countPuzzles(): number {
-  const r = getDb().prepare("SELECT COUNT(*) AS n FROM puzzles").get() as { n: number };
+export function countPuzzles(profileId: number): number {
+  const r = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM puzzles z JOIN games g ON g.id = z.game_id WHERE g.profile_id = ?`
+    )
+    .get(profileId) as { n: number };
   return Number(r.n);
 }
 
@@ -693,11 +874,14 @@ export interface OpeningReviewRow {
   last_reviewed_at: string | null;
 }
 
-export function listOpeningReviews(): OpeningReviewRow[] {
-  return getDb().prepare("SELECT * FROM opening_reviews").all() as unknown as OpeningReviewRow[];
+export function listOpeningReviews(profileId: number): OpeningReviewRow[] {
+  return getDb()
+    .prepare("SELECT * FROM opening_reviews WHERE profile_id = ?")
+    .all(profileId) as unknown as OpeningReviewRow[];
 }
 
 export function updateOpeningReview(
+  profileId: number,
   eco: string,
   ease: number,
   intervalDays: number,
@@ -707,9 +891,9 @@ export function updateOpeningReview(
 ): void {
   getDb()
     .prepare(
-      `INSERT INTO opening_reviews (eco, ease, interval_days, repetitions, due_at, clean_count, miss_count, last_reviewed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(eco) DO UPDATE SET
+      `INSERT INTO opening_reviews (profile_id, eco, ease, interval_days, repetitions, due_at, clean_count, miss_count, last_reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(profile_id, eco) DO UPDATE SET
          ease = excluded.ease,
          interval_days = excluded.interval_days,
          repetitions = excluded.repetitions,
@@ -718,37 +902,161 @@ export function updateOpeningReview(
          miss_count = opening_reviews.miss_count + excluded.miss_count,
          last_reviewed_at = datetime('now')`
     )
-    .run(eco, ease, intervalDays, repetitions, dueAt, clean ? 1 : 0, clean ? 0 : 1);
+    .run(profileId, eco, ease, intervalDays, repetitions, dueAt, clean ? 1 : 0, clean ? 0 : 1);
 }
 
 // ---------- Profiles ----------
 
 export interface Profile {
+  id: number;
   lichess_username: string;
   chesscom_username: string;
+  display_name: string;
+  created_at: string;
+  updated_at: string;
+  /** Games imported for this profile. */
+  games: number;
+  analyzed: number;
+  /**
+   * Whether a Lichess token is stored — never the token. The API returns this
+   * shape, so the secret cannot ride along by accident.
+   */
+  lichessTokenSet: boolean;
 }
 
-export function getProfile(): Profile {
-  const r = getDb().prepare("SELECT * FROM profiles WHERE id = 1").get() as
-    | Record<string, unknown>
-    | undefined;
+export interface ProfileInput {
+  lichess_username?: string;
+  chesscom_username?: string;
+  display_name?: string;
+}
+
+const PROFILE_SELECT = `
+  SELECT p.*,
+    (SELECT COUNT(*) FROM games g WHERE g.profile_id = p.id) AS games,
+    (SELECT COUNT(*) FROM games g WHERE g.profile_id = p.id AND g.analyzed = 1) AS analyzed,
+    EXISTS(SELECT 1 FROM profile_secrets s WHERE s.profile_id = p.id AND s.lichess_token <> '') AS lichessTokenSet
+  FROM profiles p`;
+
+function toProfile(r: Record<string, unknown>): Profile {
   return {
-    lichess_username: r?.lichess_username == null ? "" : String(r.lichess_username),
-    chesscom_username: r?.chesscom_username == null ? "" : String(r.chesscom_username),
+    id: Number(r.id),
+    lichess_username: r.lichess_username == null ? "" : String(r.lichess_username),
+    chesscom_username: r.chesscom_username == null ? "" : String(r.chesscom_username),
+    display_name: r.display_name == null ? "" : String(r.display_name),
+    created_at: String(r.created_at ?? ""),
+    updated_at: String(r.updated_at ?? ""),
+    games: Number(r.games ?? 0),
+    analyzed: Number(r.analyzed ?? 0),
+    lichessTokenSet: Number(r.lichessTokenSet ?? 0) === 1,
   };
 }
 
-export function setProfile(p: Profile): void {
+/** Every profile, oldest first, optionally filtered by a username substring. */
+export function listProfiles(q?: string): Profile[] {
+  const term = q?.trim().toLowerCase() ?? "";
+  const rows = term
+    ? getDb()
+        .prepare(
+          `${PROFILE_SELECT}
+           WHERE lower(p.lichess_username) LIKE ?
+              OR lower(p.chesscom_username) LIKE ?
+              OR lower(p.display_name) LIKE ?
+           ORDER BY p.id ASC`
+        )
+        .all(`%${term}%`, `%${term}%`, `%${term}%`)
+    : getDb().prepare(`${PROFILE_SELECT} ORDER BY p.id ASC`).all();
+  return (rows as Record<string, unknown>[]).map(toProfile);
+}
+
+export function getProfileById(id: number): Profile | null {
+  const r = getDb().prepare(`${PROFILE_SELECT} WHERE p.id = ?`).get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return r ? toProfile(r) : null;
+}
+
+/** The lowest-numbered profile — the fallback when no valid choice is stored. */
+export function getFirstProfileId(): number | null {
+  const r = getDb().prepare("SELECT MIN(id) AS id FROM profiles").get() as
+    | { id: number | null }
+    | undefined;
+  return r?.id == null ? null : Number(r.id);
+}
+
+export function createProfile(input: ProfileInput): number {
+  const info = getDb()
+    .prepare(
+      `INSERT INTO profiles (lichess_username, chesscom_username, display_name)
+       VALUES (?, ?, ?)`
+    )
+    .run(
+      (input.lichess_username ?? "").trim(),
+      (input.chesscom_username ?? "").trim(),
+      (input.display_name ?? "").trim()
+    );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateProfile(id: number, patch: ProfileInput): void {
+  const current = getDb().prepare("SELECT * FROM profiles WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  if (!current) return;
+  const next = {
+    lichess_username:
+      patch.lichess_username !== undefined ? patch.lichess_username.trim() : String(current.lichess_username ?? ""),
+    chesscom_username:
+      patch.chesscom_username !== undefined ? patch.chesscom_username.trim() : String(current.chesscom_username ?? ""),
+    display_name:
+      patch.display_name !== undefined ? patch.display_name.trim() : String(current.display_name ?? ""),
+  };
   getDb()
     .prepare(
-      `INSERT INTO profiles (id, lichess_username, chesscom_username, updated_at)
-       VALUES (1, ?, ?, datetime('now'))
-       ON CONFLICT(id) DO UPDATE SET
-         lichess_username=excluded.lichess_username,
-         chesscom_username=excluded.chesscom_username,
-         updated_at=excluded.updated_at`
+      `UPDATE profiles
+       SET lichess_username = ?, chesscom_username = ?, display_name = ?, updated_at = datetime('now')
+       WHERE id = ?`
     )
-    .run(p.lichess_username, p.chesscom_username);
+    .run(next.lichess_username, next.chesscom_username, next.display_name, id);
+}
+
+/** Removes a profile and everything it owns. Positions and puzzles hang off its
+ *  games, so they are cleared first rather than left orphaned. */
+export function deleteProfile(id: number): void {
+  const db = getDb();
+  db.prepare(
+    "DELETE FROM positions WHERE game_id IN (SELECT id FROM games WHERE profile_id = ?)"
+  ).run(id);
+  db.prepare(
+    "DELETE FROM puzzles WHERE game_id IN (SELECT id FROM games WHERE profile_id = ?)"
+  ).run(id);
+  db.prepare("DELETE FROM games WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM opening_reviews WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM profile_secrets WHERE profile_id = ?").run(id);
+  db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
+}
+
+/** Server-side only. Never expose the return value through an API response. */
+export function getProfileToken(id: number): string {
+  const r = getDb()
+    .prepare("SELECT lichess_token FROM profile_secrets WHERE profile_id = ?")
+    .get(id) as { lichess_token?: string | null } | undefined;
+  return r?.lichess_token == null ? "" : String(r.lichess_token);
+}
+
+export function setProfileToken(id: number, token: string): void {
+  const value = token.trim();
+  if (!value) {
+    getDb().prepare("DELETE FROM profile_secrets WHERE profile_id = ?").run(id);
+    return;
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO profile_secrets (profile_id, lichess_token, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(profile_id) DO UPDATE SET
+         lichess_token = excluded.lichess_token, updated_at = excluded.updated_at`
+    )
+    .run(id, value);
 }
 
 // ---------- Settings (key/value) ----------

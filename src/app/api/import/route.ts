@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { enqueueImportJob, getJobStats } from "@/lib/queue";
-import { setProfile, setSetting } from "@/lib/db";
+import { createProfile, updateProfile, setProfileToken, getProfileById } from "@/lib/db";
+import { activeProfileId } from "@/lib/active-profile";
 import { ensureWorkerStarted } from "@/lib/worker";
 import { config } from "@/lib/config";
 
@@ -22,8 +23,14 @@ export async function POST(request: Request) {
 
   const lichess = typeof body.lichess === "string" ? body.lichess.trim() : "";
   const chesscom = typeof body.chesscom === "string" ? body.chesscom.trim() : "";
+  // A request with no profile yet gets one, so a brand-new visitor can just type
+  // a username and go rather than being sent to the profiles page first.
+  let profileId = activeProfileId(request);
+  if (profileId == null) {
+    profileId = createProfile({ lichess_username: lichess, chesscom_username: chesscom });
+  }
   const suppliedToken = typeof body.lichessToken === "string" ? body.lichessToken.trim() : "";
-  if (suppliedToken) setSetting("lichess_token", suppliedToken);
+  if (suppliedToken) setProfileToken(profileId, suppliedToken);
 
   const max = Math.min(
     Math.max(typeof body.max === "number" ? Math.floor(body.max) : config.maxGamesPerSource, 1),
@@ -41,18 +48,35 @@ export async function POST(request: Request) {
   const jobs: { source: string; username: string; jobId: number | null; skipped: boolean }[] = [];
 
   if (lichess) {
-    jobs.push({ source: "lichess", username: lichess, ...enqueueImportJob("lichess", lichess, max, { analyzeAfter }) });
+    jobs.push({
+      source: "lichess",
+      username: lichess,
+      ...enqueueImportJob("lichess", lichess, max, profileId, { analyzeAfter }),
+    });
   }
   if (chesscom) {
-    jobs.push({ source: "chesscom", username: chesscom, ...enqueueImportJob("chesscom", chesscom, max, { analyzeAfter }) });
+    jobs.push({
+      source: "chesscom",
+      username: chesscom,
+      ...enqueueImportJob("chesscom", chesscom, max, profileId, { analyzeAfter }),
+    });
   }
 
-  setProfile({ lichess_username: lichess, chesscom_username: chesscom });
+  // Importing is also how you tell the app who you are, so the acting profile
+  // adopts whatever usernames were submitted.
+  const current = getProfileById(profileId);
+  if (current) {
+    updateProfile(profileId, {
+      lichess_username: lichess || current.lichess_username,
+      chesscom_username: chesscom || current.chesscom_username,
+    });
+  }
   ensureWorkerStarted();
 
   return NextResponse.json({
     queued: jobs.filter((j) => !j.skipped).length,
     analyzeAfter,
+    profileId,
     importJobs: jobs,
     ...getJobStats(),
   });

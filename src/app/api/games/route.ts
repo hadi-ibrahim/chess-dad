@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getProfile, queryGames, type GameQuery } from "@/lib/db";
+import { getProfileById, queryGames, type GameQuery } from "@/lib/db";
+import { activeProfileId } from "@/lib/active-profile";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,13 @@ export async function GET(request: Request) {
     return edge === "start" ? `${raw}T00:00:00.000Z` : `${raw}T23:59:59.999Z`;
   };
 
+  const profileId = activeProfileId(request);
+  if (profileId == null) {
+    return NextResponse.json({ profile: null, games: [], total: 0, page: 1, pageCount: 1, analyzed: 0 });
+  }
+
   const query: GameQuery = {
+    profileId,
     q: p.get("q") ?? undefined,
     source: p.get("source") ?? undefined,
     speed: p.get("speed") ?? undefined,
@@ -39,5 +46,5 @@ export async function GET(request: Request) {
     pageSize: number("pageSize", 50),
   };
 
-  return NextResponse.json({ profile: getProfile(), ...queryGames(query) });
+  return NextResponse.json({ profile: getProfileById(profileId), ...queryGames(query) });
 }

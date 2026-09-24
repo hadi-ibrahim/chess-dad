@@ -23,7 +23,7 @@ export interface PuzzleWithContext extends PuzzleRow {
 }
 
 /** All puzzles, newest first, with game context and the source position's coaching. */
-export function listPuzzlesWithContext(): PuzzleWithContext[] {
+export function listPuzzlesWithContext(profileId: number): PuzzleWithContext[] {
   const db = getDb();
   const rows = db
     .prepare(
@@ -37,9 +37,10 @@ export function listPuzzlesWithContext(): PuzzleWithContext[] {
        LEFT JOIN positions pos ON pos.id = p.position_id
        LEFT JOIN positions prev ON prev.game_id = pos.game_id AND prev.ply = pos.ply - 1
        LEFT JOIN engine_cache ec ON ec.fen = p.fen
+       WHERE g.profile_id = ?
        ORDER BY p.id DESC`
     )
-    .all() as Record<string, unknown>[];
+    .all(profileId) as Record<string, unknown>[];
 
   return rows.map((r) => ({
     id: Number(r.id),
@@ -113,12 +114,15 @@ export function recordPuzzleAnswer(id: number, correct: boolean): SrsResult {
   return { id, correct, ease, intervalDays: interval, repetitions: reps, dueAt };
 }
 
-export function countDuePuzzles(): number {
+export function countDuePuzzles(profileId: number): number {
   const db = getDb();
   const now = new Date().toISOString();
   const r = db
-    .prepare("SELECT COUNT(*) n FROM puzzles WHERE due_at IS NULL OR due_at <= ?")
-    .get(now) as { n: number };
+    .prepare(
+      `SELECT COUNT(*) n FROM puzzles z JOIN games g ON g.id = z.game_id
+       WHERE g.profile_id = ? AND (z.due_at IS NULL OR z.due_at <= ?)`
+    )
+    .get(profileId, now) as { n: number };
   return Number(r.n);
 }
 

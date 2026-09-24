@@ -295,7 +295,7 @@ async function analyzeGameWithEngine(
       p.color === game.player_color &&
       (classification === "blunder" || classification === "mistake" || classification === "miss") &&
       bestUci &&
-      !puzzleExists(p.fen)
+      !puzzleExists(p.fen, game.profile_id)
     ) {
       insertPuzzle({
         game_id: gameId,

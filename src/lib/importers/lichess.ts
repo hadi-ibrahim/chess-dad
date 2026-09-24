@@ -5,7 +5,7 @@ import { parseRetryAfterMs, sleep, USER_AGENT } from "../http";
 import type { NewGame } from "../db";
 import type { Color, JobProgress, PlyInfo } from "../types";
 
-export interface ImportedGame extends NewGame {
+export interface ImportedGame extends Omit<NewGame, "profile_id"> {
   plies: PlyInfo[];
 }
 
@@ -233,6 +233,7 @@ export async function fetchLichessGames(
 export async function importLichess(
   username: string,
   max: number,
+  profileId: number,
   token?: string,
   onProgress?: (info: JobProgress) => void
 ): Promise<{ username: string; count: number; gameIds: number[] }> {
@@ -245,6 +246,7 @@ export async function importLichess(
   for (let i = 0; i < games.length; i++) {
     const g = games[i];
     const gameId = upsertGame({
+      profile_id: profileId,
       source: g.source,
       external_id: g.external_id,
       pgn: g.pgn,

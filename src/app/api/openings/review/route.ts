@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { findOpening } from "@/lib/openings";
 import { listOpeningReviews, updateOpeningReview } from "@/lib/db";
+import { activeProfileId } from "@/lib/active-profile";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +16,12 @@ export async function POST(request: Request) {
   if (!eco || !findOpening(eco)) {
     return NextResponse.json({ error: "Unknown ECO" }, { status: 404 });
   }
+  const profileId = activeProfileId(request);
+  if (profileId == null) {
+    return NextResponse.json({ error: "No profile selected." }, { status: 404 });
+  }
   const clean = Boolean(body.clean);
-  const current = listOpeningReviews().find((r) => r.eco === eco) ?? null;
+  const current = listOpeningReviews(profileId).find((r) => r.eco === eco) ?? null;
   const ease0 = current?.ease ?? 2.5;
   const interval0 = current?.interval_days ?? 0;
   const reps0 = current?.repetitions ?? 0;
@@ -35,6 +40,6 @@ export async function POST(request: Request) {
     intervalDays = 1;
   }
   const dueAt = new Date(Date.now() + intervalDays * 86_400_000).toISOString();
-  updateOpeningReview(eco, ease, intervalDays, repetitions, dueAt, clean);
+  updateOpeningReview(profileId, eco, ease, intervalDays, repetitions, dueAt, clean);
   return NextResponse.json({ eco, clean, ease, intervalDays, repetitions, dueAt });
 }

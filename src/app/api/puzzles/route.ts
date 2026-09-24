@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { listPuzzlesWithContext, recordPuzzleAnswer } from "@/lib/puzzles";
+import { activeProfileId } from "@/lib/active-profile";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return NextResponse.json({ puzzles: listPuzzlesWithContext() });
+export async function GET(request: Request) {
+  const profileId = activeProfileId(request);
+  return NextResponse.json({ puzzles: profileId == null ? [] : listPuzzlesWithContext(profileId) });
 }
 
 export async function POST(request: Request) {

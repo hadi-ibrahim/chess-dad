@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import { computeWeaknesses } from "./weaknesses";
-import { getProfile } from "./db";
+import { getProfileById } from "./db";
 
 /**
  * Emit the player's aggregate progress back into the OKF bundle as a per-user
@@ -43,10 +43,10 @@ export interface ProgressBundleResult {
 }
 
 /** Regenerate the per-user progress documents. Safe to call repeatedly. */
-export function writeProgressBundle(): ProgressBundleResult {
-  const profile = getProfile();
-  const username = profile.lichess_username || profile.chesscom_username || "player";
-  const w = computeWeaknesses();
+export function writeProgressBundle(profileId: number): ProgressBundleResult {
+  const profile = getProfileById(profileId);
+  const username = profile?.lichess_username || profile?.chesscom_username || "player";
+  const w = computeWeaknesses("all", profileId);
 
   if (w.analyzedGames === 0) {
     return { written: [], analyzedGames: 0 };

@@ -4,7 +4,7 @@ import { analyzeGame } from "./analysis";
 import { importLichess } from "./importers/lichess";
 import { importChessCom } from "./importers/chesscom";
 import { writeProgressBundle } from "./okf-progress";
-import { filterUnanalyzedWithMoves, getSetting } from "./db";
+import { filterUnanalyzedWithMoves, getGame, getSetting } from "./db";
 import {
   claimNextJob,
   completeJob,
@@ -107,9 +107,14 @@ async function loop(slot: number): Promise<void> {
     try {
       const result = await runJob(claimed);
       completeJob(claimed.id, result);
-      // Keep the OKF progress document in step with the library.
+      // Keep the OKF progress document in step with the library. Progress is
+      // per profile, so it is written for whoever owns the job's output.
       try {
-        writeProgressBundle();
+        const profileId =
+          claimed.type === "import"
+            ? (claimed.payload as unknown as ImportPayload).profileId
+            : getGame((claimed.payload as unknown as AnalyzePayload).gameId)?.profile_id;
+        if (profileId != null) writeProgressBundle(profileId);
       } catch {
         // knowledge emission must never fail a job
       }
@@ -159,8 +164,14 @@ async function runImportJob(job: Job): Promise<Record<string, unknown>> {
 
   const result =
     p.source === "lichess"
-      ? await importLichess(p.username, p.max, getSetting("lichess_token") || undefined, onProgress)
-      : await importChessCom(p.username, p.max, onProgress);
+      ? await importLichess(
+          p.username,
+          p.max,
+          p.profileId,
+          getSetting("lichess_token") || undefined,
+          onProgress
+        )
+      : await importChessCom(p.username, p.max, p.profileId, onProgress);
 
   // Chain straight into analysis so an import is one action, not two.
   let analysisQueued = 0;
