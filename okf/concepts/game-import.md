@@ -57,7 +57,7 @@ The importer therefore:
 * retries after a wait on both `429` (honouring `Retry-After`) and a masked `404`;
 * tells "user not found" apart from throttling by checking the profile endpoint;
 * rejects a bad token immediately on `401`/`403`, pointing at the token page;
-* accepts a personal API token — from the import form or `LICHESS_TOKEN` — whose
+* accepts a personal API token — stored per profile or from `LICHESS_TOKEN` — whose
   authenticated limits are several times higher. A supplied token is stored in
   the `settings` table, so it survives restarts without an env change.
 

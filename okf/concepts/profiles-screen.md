@@ -24,6 +24,16 @@ Chess Dad holds **several people's libraries in one database**. The
 everyone, adds a new person, searches usernames, and switches who the app is
 acting as.
 
+# Creating a profile
+
+Profiles are added **only here**. The Games tab has no username, token or options
+form — importing is one button and it always acts for whoever is active, reading
+that profile's linked accounts and stored token server-side.
+
+Nothing auto-creates a profile. An empty database therefore has none, and the
+Games tab shows a "no profile is active" state that leads back to this screen.
+Deleting every profile returns the app to that state.
+
 # Choosing a profile
 
 There are **no accounts**. The browser stores a profile id in a `cd_profile`
@@ -36,6 +46,15 @@ It is a **preference, not an access-control boundary**. Anyone using the app can
 add a profile, search the directory, and see any profile's library by switching
 to it. The app is single-tenant and assumes its users trust each other; it should
 not be exposed publicly without adding real authentication first.
+
+# Importing
+
+The Games tab shows the acting profile and a single **Import games** /
+**Re-import games** button — the label follows whether that profile already has
+games. It posts to `/api/import` with no body; the route resolves the acting
+profile, and refuses with 409 when none is active rather than silently creating
+one. Explicit usernames are still accepted by the API for scripted use, and only
+then does an import update the profile's accounts.
 
 # What a profile owns
 
