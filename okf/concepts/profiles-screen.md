@@ -102,6 +102,12 @@ so a listing endpoint cannot serialise it by accident — and is **write-only
 across the API**. Both `/api/settings` and the profile endpoints report only
 `lichessTokenSet`, never the value.
 
+Because the field cannot be prefilled, the form has to be actionable on its own,
+so both the create and edit forms link out to
+<https://lichess.org/account/oauth/token> and state that **no scopes are
+required** to read public games — a token only raises rate limits and reaches
+private games.
+
 # Known limits
 
 * **Not an auth boundary.** See above; the accepted consequence of having no

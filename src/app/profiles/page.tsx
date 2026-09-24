@@ -13,6 +13,28 @@ interface Profile {
   lichessTokenSet: boolean;
 }
 
+/**
+ * Where to actually get a token — the one thing about this field nobody can
+ * guess. Carried over from the original import form rather than summarised away,
+ * because "paste a personal API token" is only actionable with the link.
+ */
+function TokenHint() {
+  return (
+    <span className="mt-1 block text-xs text-zinc-400">
+      Create one at{" "}
+      <a
+        href="https://lichess.org/account/oauth/token"
+        target="_blank"
+        rel="noreferrer"
+        className="text-indigo-400 hover:underline"
+      >
+        lichess.org/account/oauth/token
+      </a>{" "}
+      — no scopes are required to read public games.
+    </span>
+  );
+}
+
 /** What to call someone when neither username has been filled in. */
 function label(p: Profile): string {
   return p.display_name || p.lichess_username || p.chesscom_username || `Profile ${p.id}`;
@@ -251,19 +273,25 @@ export default function Profiles() {
             />
           </label>
           <label className="block text-sm">
-            <span className="text-zinc-300">Lichess API token (optional)</span>
+            <span className="text-zinc-300">
+              Lichess API token{" "}
+              <span className="text-zinc-400">(optional — makes imports reliable)</span>
+            </span>
             <input
               value={addDraft.lichessToken}
               onChange={(e) => setAddDraft((d) => ({ ...d, lichessToken: e.target.value }))}
               type="password"
-              placeholder="Only needed for private games"
+              autoComplete="off"
+              placeholder="Paste a personal API token"
               className={FIELD}
             />
+            <TokenHint />
           </label>
         </div>
         <p className="mt-2 text-xs text-zinc-400">
           Fill in either username, or both. Tokens are stored against the profile and are never
-          sent back to the browser — the app only ever reports whether one is set.
+          sent back to the browser — the app only ever reports whether one is set, so removing one
+          is a deliberate action on its row below.
         </p>
         <button type="button" onClick={add} disabled={adding} className={`mt-3 ${PRIMARY}`}>
           {adding ? "Adding…" : "Add profile"}
@@ -344,9 +372,15 @@ export default function Profiles() {
                             value={draft.lichessToken}
                             onChange={(e) => setDraft((d) => ({ ...d, lichessToken: e.target.value }))}
                             type="password"
-                            placeholder={p.lichessTokenSet ? "A token is saved — leave blank to keep it" : "No token saved"}
+                            autoComplete="off"
+                            placeholder={
+                              p.lichessTokenSet
+                                ? "A token is saved — leave blank to reuse it"
+                                : "Paste a personal API token"
+                            }
                             className={FIELD}
                           />
+                          <TokenHint />
                         </label>
                       </div>
                       <p className="mt-2 text-xs text-zinc-400">
