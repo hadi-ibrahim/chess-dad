@@ -36,8 +36,27 @@ back up, and personal game history stays private.
 | `opening_reviews` | Per-ECO review state for the opening trainer — the same simplified SM-2 fields as `puzzles` |
 | `engine_cache` | FEN → engine evaluation, so repeated positions are never re-searched |
 | `llm_cache` | FEN → coaching explanation, so repeated positions are never re-explained |
-| `settings` | Small key/value store (for example, the Lichess token) |
-| `profiles` | The linked Lichess and Chess.com usernames (single row) |
+| `profiles` | One row per person: linked Lichess and Chess.com usernames plus a display name. Was a single pinned row before profiles. |
+| `profile_secrets` | Per-profile Lichess token. Kept in its own table so a `SELECT *` on `profiles` can never serialise it. |
+| `settings` | Small app-wide key/value store. No longer holds the token. |
+
+# Profiles and scoping
+
+Every row that represents a person's own chess is reached through a profile:
+
+* `games.profile_id` — the owning profile. `UNIQUE(profile_id, source,
+  external_id)`, not `UNIQUE(source, external_id)`: two people who played each
+  other both import the same game, and the old global key let the second import
+  overwrite the first player's colour, opponent and rating.
+* `positions` and `puzzles` have no profile of their own — they are reached
+  through `games`, so every query joins to the owning game.
+* `opening_reviews` is keyed `(profile_id, eco)`; review schedules are per player.
+
+A pre-profile database is upgraded in place on first open: the three tables that
+hard-coded a single user are rebuilt, and every existing row is attributed to
+profile 1, which the old schema guaranteed was the only one. Rebuilds copy ids
+verbatim so `positions.game_id` and `puzzles.game_id` keep pointing at the right
+games. Indexes live outside the schema statement because a rebuild drops them.
 
 # Caching
 
