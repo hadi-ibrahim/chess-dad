@@ -12,6 +12,7 @@ export default function Nav() {
     { href: "/puzzles", label: "Puzzles" },
     { href: "/openings", label: "Openings" },
     { href: "/knowledge", label: "Knowledge" },
+    { href: "/profiles", label: "Profiles" },
   ];
 
   return (
