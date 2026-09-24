@@ -56,6 +56,33 @@ profile, and refuses with 409 when none is active rather than silently creating
 one. Explicit usernames are still accepted by the API for scripted use, and only
 then does an import update the profile's accounts.
 
+# One profile, both accounts
+
+A profile holds a Lichess username, a Chess.com username, or both — they are two
+columns on the same row, and an import queues a job per linked account against
+the same `profileId`, so games from either source land in one library. An import
+is skipped only if that account is already queued for that profile.
+
+# Editing
+
+Any profile can be edited in place, not just selected or deleted. The row opens
+an inline form — no modal, since this needs neither interruption nor protected
+focus — over the same fields as creation. Saving sends a `PATCH` with only the
+fields that changed.
+
+Token handling is deliberately asymmetric, because a token is never sent back to
+the browser and so cannot be prefilled:
+
+* the token field starts **blank**, and a blank field is **omitted** from the
+  request, so renaming a profile cannot wipe its token;
+* typing a value **replaces** it;
+* removing it needs the explicit **Remove saved token** action, which is the only
+  path that sends an empty string and so the only path that clears it.
+
+Changing a username does **not** re-attribute existing games: they keep the
+`profile_id` they were imported under. Editing is about the account, not the
+history.
+
 # What a profile owns
 
 * Its **games**, and through them its positions and puzzles.
