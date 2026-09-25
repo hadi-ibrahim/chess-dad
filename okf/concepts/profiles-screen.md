@@ -1,119 +1,154 @@
 ---
 type: Reference
 title: Profiles Screen
-description: How Chess Dad keeps several people's games apart without accounts, and how a browser picks the profile it is acting as.
-tags: [profiles, identity, multi-user, scoping]
+description: How Chess Dad keeps a person's chess theirs without accounts — profiles live in the browser, games are filed by account, and the server remembers nobody.
+tags: [profiles, identity, multi-user, scoping, privacy]
 status: stable
 generated: { by: chessdad/1.0, at: 2026-09-24 }
+updated: { by: "process:ai-providers", at: 2026-09-25 }
 sources:
   - id: profiles-page
     resource: src/app/profiles/page.tsx
-    title: Chess Dad — profiles directory
-  - id: active-profile
-    resource: src/lib/active-profile.ts
-    title: Chess Dad — activeProfileId() cookie resolution
-  - id: profiles-api
-    resource: src/app/api/profiles/route.ts
-    title: Chess Dad — profile directory and create
+    title: Chess Dad — browser-local profiles screen
+  - id: client-profiles
+    resource: src/lib/client-profiles.ts
+    title: Chess Dad — localStorage profile store
+  - id: profile-cookie
+    resource: src/lib/profile-cookie.ts
+    title: Chess Dad — the cd_profile cookie codec
+  - id: identity-code
+    resource: src/lib/identity.ts
+    title: Chess Dad — identityOf() and scopesOf()
+  - id: library-code
+    resource: src/lib/library.ts
+    title: Chess Dad — viewerOf() and the account-to-game sync
 ---
 
 # Overview
 
-Chess Dad holds **several people's libraries in one database**. The
-[profiles screen](../../src/app/profiles/page.tsx) is the directory: it lists
-everyone, adds a new person, searches usernames, and switches who the app is
-acting as.
+Chess Dad is **multi-profile without accounts and without a user table**. A
+profile is a small object the browser owns:
+
+```json
+{ "id": "…", "name": "Hadi", "lichess": "Rooronoa", "chesscom": "Rooronoa_HaD" }
+```
+
+The list lives in `localStorage`; the acting one rides a `cd_profile` cookie as
+base64url JSON, which the server reads on every request. Nothing about a person
+is ever written to SQLite — so publishing the app cannot expose who uses it, and
+one visitor's setup cannot disturb another's.
+
+# What is local and what is shared
+
+| Thing | Where it lives | Shared? |
+|-------|----------------|---------|
+| The profile itself (name, accounts, which is active) | This browser | No |
+| The Lichess token | This browser, with the profile | No — posted per import |
+| AI provider connections, including API keys | This browser, with the profile | No — posted per AI request |
+| Games, positions, engine and coach explanations | `games` / `positions` / the FEN-keyed caches | Yes, globally |
+| AI readings of a position | `ai_explanations`, keyed by position + provider + model | Yes, globally |
+| Which games are *yours*, and your colour | `library`, keyed by account | Per account |
+| Puzzle and opening schedules | `puzzle_reviews` / `opening_reviews`, keyed by account | Per account |
+
+The library key is the **account** (`lichess:rooronoa`), not the profile. That one
+choice is what makes the important case work: setting up the same account in a
+second browser produces the same key, so the games and their analysis are already
+there.
 
 # Creating a profile
 
-Profiles are added **only here**. The Games tab has no username, token or options
-form — importing is one button and it always acts for whoever is active, reading
-that profile's linked accounts and stored token server-side.
+Profiles are added only on this screen, and only in this browser. Either username
+is enough — a profile can hold a Lichess account, a Chess.com account, or both,
+and the two accounts feed one library. Nothing auto-creates a profile, and a
+browser with none shows a "no profile is active" state on the Games tab that
+leads back here.
 
-Nothing auto-creates a profile. An empty database therefore has none, and the
-Games tab shows a "no profile is active" state that leads back to this screen.
-Deleting every profile returns the app to that state.
+Adding or switching a profile also asks the server to **link** the accounts: every
+game already stored that those names appear in is attached immediately. That is
+why a second browser starts with its whole history and nothing to import.
 
 # Choosing a profile
 
-There are **no accounts**. The browser stores a profile id in a `cd_profile`
-cookie; `activeProfileId()` in `src/lib/active-profile.ts` validates it against
-the database on every request and falls back to the lowest-numbered profile when
-the cookie is missing, stale or not a number. Switching is a single click and
-takes effect immediately, because every scoped query reads the same cookie.
-
-It is a **preference, not an access-control boundary**. Anyone using the app can
-add a profile, search the directory, and see any profile's library by switching
-to it. The app is single-tenant and assumes its users trust each other; it should
-not be exposed publicly without adding real authentication first.
+Switching writes the cookie and nothing else. `identityOf()` reads it back and
+`scopesOf()` turns the accounts into library keys; every viewer-scoped query is
+built from those. It is a **preference, not an access-control boundary** — anyone
+can write a different cookie and see a different account's library, which amounts
+to the same information the games themselves already publish. It is not a
+security claim, and the app does not pretend it is one.
 
 # Importing
 
-The Games tab shows the acting profile and a single **Import games** /
-**Re-import games** button — the label follows whether that profile already has
-games. It posts to `/api/import` with no body; the route resolves the acting
-profile, and refuses with 409 when none is active rather than silently creating
-one. Explicit usernames are still accepted by the API for scripted use, and only
-then does an import update the profile's accounts.
+The Games tab shows the acting profile, a **Games per account** selector, and one
+**Import games** / **Re-import games** button. It posts no usernames: the route
+resolves the accounts from the cookie and refuses with 409 when there is nobody to
+import for. An import that finds a game already stored links it and keeps the
+existing analysis, so an account that is already known costs no engine time at all.
 
-# One profile, both accounts
-
-A profile holds a Lichess username, a Chess.com username, or both — they are two
-columns on the same row, and an import queues a job per linked account against
-the same `profileId`, so games from either source land in one library. An import
-is skipped only if that account is already queued for that profile.
+The selector sets `max` on that request — the *most recent* N games, **per
+account** (so with both Lichess and Chess.com configured, "10" means up to ten from
+each). The server clamps it to 1..200 and otherwise falls back to
+`MAX_GAMES_PER_SOURCE`. Being able to ask for a handful is what makes the app
+cheap to try, and what lets a new profile be set up without pulling and analysing a
+hundred games; the choice is remembered in `localStorage` under `cd_import_max`,
+because having it reset on every visit was the annoying part.
 
 # Editing
 
-Any profile can be edited in place, not just selected or deleted. The row opens
-an inline form — no modal, since this needs neither interruption nor protected
-focus — over the same fields as creation. Saving sends a `PATCH` with only the
-fields that changed.
+Any profile can be edited in place, over the same fields as creation. Games are
+**not** re-attributed by an edit, because they were never attributed to a profile
+in the first place: they belong to the account. Changing a username only changes
+which accounts this browser reads from.
 
-Token handling is deliberately asymmetric, because a token is never sent back to
-the browser and so cannot be prefilled:
-
-* the token field starts **blank**, and a blank field is **omitted** from the
-  request, so renaming a profile cannot wipe its token;
-* typing a value **replaces** it;
-* removing it needs the explicit **Remove saved token** action, which is the only
-  path that sends an empty string and so the only path that clears it.
-
-Changing a username does **not** re-attribute existing games: they keep the
-`profile_id` they were imported under. Editing is about the account, not the
-history.
-
-# What a profile owns
-
-* Its **games**, and through them its positions and puzzles.
-* Its **opening review schedule**.
-* Its **Lichess token**.
-
-Every read path is scoped: the [games browser](games-browser.md),
-[insights](weakness-definitions.md), [puzzles screen](puzzles-screen.md) and
-[openings screen](openings-screen.md) all resolve the acting profile first. An
-import job carries its `profileId` in the payload, so a fetch that outlives the
-request still writes to the right library.
+Removing a profile removes it from this browser and stops listing its games. The
+games and their analysis stay on the server, and adding the same account again
+brings them straight back — the UI says so rather than warning about data loss.
 
 # Tokens
 
-A token is stored in `profile_secrets` — deliberately not on the `profiles` row,
-so a listing endpoint cannot serialise it by accident — and is **write-only
-across the API**. Both `/api/settings` and the profile endpoints report only
-`lichessTokenSet`, never the value.
+The Lichess token is **part of the profile and never leaves the browser.** It is
+saved in `localStorage` beside the name and accounts, sent in the body of the one
+import request that needs it, and used there for a single `Authorization` header.
+The server stores nothing — no table, no session map, no cookie — so a restart or
+redeploy does not lose it and a compromised deployment has nothing to hand over.
+`encodeProfile` whitelists the four profile fields, so the token cannot ride along
+in the `cd_profile` cookie by accident.
 
-Because the field cannot be prefilled, the form has to be actionable on its own,
-so both the create and edit forms link out to
+Because the field cannot be prefilled, both forms link out to
 <https://lichess.org/account/oauth/token> and state that **no scopes are
-required** to read public games — a token only raises rate limits and reaches
-private games.
+required** to read public games. A profile can hold a token per account, and
+"Forget token" on its row clears just that one.
+
+An operator can still set `LICHESS_TOKEN` for a headless install; that belongs to
+the deployment, not to a user, and only shows up as `deploymentTokenSet`.
+
+# AI providers
+
+The same form holds a profile's **AI provider connections**, and they are edited
+with the shared `LlmConnections` component in both "Add a profile" and the inline
+edit. Each connection is a provider, an optional name, a model (free text, with
+suggestions — any id the provider currently offers works), an API key, an
+optional base URL, and — for DeepSeek — a reasoning toggle that is off unless
+explicitly enabled.
+
+A connection's key is **never rendered back into the DOM**: editing shows a blank
+field that means "keep the saved key", and replacing it takes a typed value. This
+is the same convention as the Lichess token, for the same reason.
+
+The list also selects a **default** connection, which the review screen
+preselects. A profile row shows the default provider and how many others exist.
+Provider and model metadata (labels, suggested models, where to get a key, which
+base URLs are allowed) lives in `src/lib/llm-providers.ts`, which is deliberately
+importable from both the browser and the server so the two can never disagree
+about what a connection is. See [AI providers](ai-providers.md).
 
 # Known limits
 
-* **Not an auth boundary.** See above; the accepted consequence of having no
-  accounts.
-* **Deleting a profile deletes its games, positions, puzzles, review schedule and
-  token.** The API requires an explicit `DELETE` per profile and the UI confirms
-  first, but there is no undo.
-* **Puzzle deduplication is per profile**, so two profiles can hold a puzzle for
-  the same position. That is intended: they are different people's drills.
+* **Not an auth boundary.** See above; a cookie names the library, it does not
+  guard it.
+* **Profiles are per browser.** Clearing site data forgets them, token included.
+  That is the trade for having nothing to leak, and re-adding an account costs one
+  form.
+* **A throttled anonymous import holds its request open** while it waits out a
+  rate-limit window. A saved token raises the limits and avoids it.
+* **Deduplication is global**, not per person: two players who reach the same
+  position share one drill, and each keeps their own practice schedule for it.

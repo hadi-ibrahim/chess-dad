@@ -20,33 +20,40 @@ sources:
 
 # Overview
 
-Two things take real time: **fetching** a game history (network, and Lichess can
-throttle for a minute) and **analysing** one (running Stockfish on every
-position). Doing either inside an HTTP request would block the request and lock
-the UI, so both are published as **jobs** onto a durable queue and executed by a
-background **worker pool**.
+**Analysing** a game is slow — Stockfish runs on every position — and doing it
+inside an HTTP request would block the request and lock the UI. So analysis is
+published as **jobs** onto a durable queue and executed by a background **worker
+pool**.
+
+**Fetching** a game history is not queued. It runs inside the import request,
+because that request is the only place the caller's Lichess token exists: the
+token lives in the browser and is handed over per call, so there is nothing for a
+worker to pick up later. See [Game import](game-import.md).
 
 # Job types
 
-One queue carries every kind of background work; each job stores a `type` and a
-JSON `payload`.
+Each job stores a `type` and a JSON `payload`. There is exactly one type.
 
 | Type | Payload | Does |
 |------|---------|------|
-| `import` | `{ source, username, max, analyzeAfter }` | Fetch a profile's games and store their positions |
 | `analyze` | `{ gameId, depth, explain, generatePuzzles }` | Run the engine pipeline over one game |
 
-Imports are user-initiated, so they carry a higher `priority` and are claimed
-ahead of a long analysis backlog. Duplicate jobs are rejected: an import already
-pending for the same source+username, or an analysis already pending for a game,
-is skipped rather than queued twice.
+Because a game is stored once for everyone who played it, an analysis already
+pending for a game is skipped rather than queued twice — two accounts holding the
+same game share the one run.
+
+An earlier version also queued `import` jobs, which forced the caller's token to
+be parked somewhere between the request and the worker. Retiring the type is what
+lets the server hold no secret at all; any leftover `import` row is deleted on
+startup.
 
 # Chaining
 
-An `import` job with `analyzeAfter` **enqueues analysis for the imported games
-that have moves and are not yet analysed**, so importing and analysing is one
-action rather than two. The import's result records how much it did
-(`{ source, username, imported, analysisQueued }`).
+The import request chains straight into analysis: once the games are stored, the
+ones that have moves and are not yet analysed are published as `analyze` jobs, so
+importing and analysing is one action rather than two. The import response
+records what it did per account
+(`{ source, username, imported, analysisQueued, alreadyKnown }`).
 
 # The queue
 

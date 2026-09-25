@@ -5,7 +5,7 @@ description: How the per-game review screen flags critical moves, separates the 
 tags: [review, ui, classification, critical-moments, coaching]
 status: draft
 generated: { by: "process:okf-code-sync", at: 2026-09-23 }
-updated: { by: "process:okf-code-sync", at: 2026-09-23 }
+updated: { by: "process:ai-providers", at: 2026-09-25 }
 sources:
   - id: review-screen-code
     resource: "src/app/review/[id]/GameReview.tsx"
@@ -77,6 +77,30 @@ of the player's mistakes/blunders/missed wins, how many chances the opponent
 gave, phase and motif tallies, and jump buttons to the costliest and first
 mistakes.
 
+# Deeper analysis (AI)
+
+Below the coach panel sits an opt-in **Deeper analysis (AI)** section. The engine
+coach above is always the baseline and is never replaced; an AI reading is stored
+*beside* it in `ai_explanations` and shown as a second opinion.
+
+* The provider is a connection saved on the [Profiles screen](profiles-screen.md).
+  The profile's default connection is preselected; the rest are in the dropdown.
+* **Explain this move** explains only the selected ply; **Explain all flagged
+  moves** explains every critical moment in the game (capped at 40 positions).
+  Both post the chosen connection — key included — to `POST /api/games/:id/ai`,
+  which uses it for that request's outbound calls and stores nothing about it.
+* A cached answer for the *same* provider and model is returned without a request,
+  so re-running a provider is free; the notice says how many came from cache.
+* Every reading ever stored for the position is kept and offered as a chip
+  (`Claude · claude-sonnet-4-5`, `GPT · gpt-5`, …). Selecting one shows that text,
+  which is the point of the feature: what Claude said last week stays viewable
+  after GPT answers today.
+* A generated answer that names a move that is not legal in the position is
+  discarded rather than shown or cached — the same guard the offline coach has
+  always had. The failure is reported in the panel, and the engine read stays.
+* With no provider configured the section links to Profiles and the rest of the
+  screen is unaffected.
+
 # The move list and evaluation graph
 
 The move list pairs White and Black plies per move number. Each move is coloured
@@ -98,7 +122,9 @@ evaluation bar keeps its numeric label only from `sm` up, so a 390px screen give
 the extra pixels to the position; the bar itself still announces the value to
 assistive technology.
 
-`Analyze` / `Re-analyze` runs `POST /api/games/:id/analyze` for this game
+`Analyze` / `Re-run engine` runs `POST /api/games/:id/analyze` for this game
 directly (not through the queue) at the chosen depth — the screen offers quick
 (10), standard (14), and deep (18). Re-running an already analysed game asks for
-confirmation because it replaces the stored analysis.
+confirmation because it replaces the stored engine analysis. It is deliberately
+labelled as the *engine* run so it is not confused with the AI re-analysis above,
+which never touches the engine data.

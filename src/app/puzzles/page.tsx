@@ -75,6 +75,7 @@ function moveLabel(ply: number | null): string | null {
 
 export default function Puzzles() {
   const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
+  const [needsProfile, setNeedsProfile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState<string | null>(null);
   const [dueOnly, setDueOnly] = useState(true);
@@ -103,6 +104,7 @@ export default function Puzzles() {
     const res = await fetch("/api/puzzles");
     const data = await res.json();
     setPuzzles((data.puzzles as Puzzle[]) || []);
+    setNeedsProfile(Boolean(data.needsProfile));
     setLoading(false);
   }, []);
 
@@ -485,8 +487,26 @@ export default function Puzzles() {
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-bold">Puzzles</h1>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center text-zinc-300">
-          No personal puzzles yet. Analyse some games and your own mistakes become drills here.
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
+          {needsProfile ? (
+            <>
+              <p className="text-zinc-200">No profile is active.</p>
+              <p className="mx-auto mt-1 max-w-md text-sm text-zinc-400">
+                Drills are built from your own mistakes, so add a profile first. Drills already
+                derived for that account appear straight away.
+              </p>
+              <Link
+                href="/profiles"
+                className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+              >
+                Go to Profiles
+              </Link>
+            </>
+          ) : (
+            <p className="text-zinc-300">
+              No personal puzzles yet. Analyse some games and your own mistakes become drills here.
+            </p>
+          )}
         </div>
       </div>
     );

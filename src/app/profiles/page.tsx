@@ -1,16 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PROFILE_COOKIE } from "@/lib/profile-cookie";
+import {
+  activeProfile,
+  clearActiveProfile,
+  createProfile,
+  loadProfiles,
+  refreshCookie,
+  saveProfiles,
+  setActiveProfile,
+  type StoredProfile,
+} from "@/lib/client-profiles";
+import { profileLabel } from "@/lib/profile-cookie";
+import { connectionLabel, type LlmConnection } from "@/lib/llm-providers";
+import LlmConnections from "@/components/LlmConnections";
 
-interface Profile {
-  id: number;
-  lichess_username: string;
-  chesscom_username: string;
-  display_name: string;
+interface Stats {
+  id: string;
   games: number;
   analyzed: number;
-  lichessTokenSet: boolean;
 }
 
 /**
@@ -35,16 +43,13 @@ function TokenHint() {
   );
 }
 
-/** What to call someone when neither username has been filled in. */
-function label(p: Profile): string {
-  return p.display_name || p.lichess_username || p.chesscom_username || `Profile ${p.id}`;
-}
-
 const EMPTY_DRAFT = {
-  display_name: "",
-  lichess_username: "",
-  chesscom_username: "",
+  name: "",
+  lichess: "",
+  chesscom: "",
   lichessToken: "",
+  llm: [] as LlmConnection[],
+  defaultLlmId: "",
 };
 
 const FIELD =
@@ -54,11 +59,14 @@ const BTN =
 const PRIMARY =
   "min-h-11 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400";
 
+const TOKEN_NOTE =
+  "Kept in this browser only, saved with the profile. It is sent once per import — for the Lichess request and nothing else — and is never sent to the server at any other time.";
+
 export default function Profiles() {
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [q, setQ] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
+  const [profiles, setProfiles] = useState<StoredProfile[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [stats, setStats] = useState<Record<string, Stats>>({});
+  const [deploymentTokenSet, setDeploymentTokenSet] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -67,46 +75,72 @@ export default function Profiles() {
   const [addDraft, setAddDraft] = useState(EMPTY_DRAFT);
   const [adding, setAdding] = useState(false);
 
-  // Inline edit — one row at a time, so the directory stays visible and there is
-  // no modal for something that needs neither interruption nor protected focus.
-  const [editingId, setEditingId] = useState<number | null>(null);
+  // Inline edit — one row at a time, so the list stays visible and there is no
+  // modal for something that needs neither interruption nor protected focus.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(q), 250);
-    return () => clearTimeout(t);
-  }, [q]);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/profiles?q=${encodeURIComponent(debouncedQ)}`);
-      if (!res.ok) throw new Error(`Could not load profiles (${res.status})`);
-      const body = (await res.json()) as { profiles: Profile[]; activeProfileId: number | null };
-      setProfiles(body.profiles);
-      setActiveId(body.activeProfileId);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
+  const refreshStats = useCallback(async (list: StoredProfile[]) => {
+    const [statsRes, settingsRes] = await Promise.all([
+      list.length
+        ? fetch("/api/profiles/stats", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // The profiles are local, so the screen sends them up to be counted.
+            body: JSON.stringify({ profiles: list }),
+          })
+        : Promise.resolve(null),
+      fetch("/api/settings"),
+    ]);
+    if (statsRes?.ok) {
+      const body = (await statsRes.json()) as { stats: Stats[] };
+      setStats(Object.fromEntries(body.stats.map((s) => [s.id, s])));
     }
-  }, [debouncedQ]);
+    if (settingsRes.ok) {
+      const body = (await settingsRes.json()) as { deploymentTokenSet: boolean };
+      setDeploymentTokenSet(Boolean(body.deploymentTokenSet));
+    }
+  }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch keyed by the search term
-    void load();
-  }, [load]);
+    const list = loadProfiles();
+    const active = activeProfile();
+    /* eslint-disable react-hooks/set-state-in-effect -- reading this browser's own storage on mount */
+    setProfiles(list);
+    setActiveId(active?.id ?? null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    void refreshStats(list).finally(() => setLoading(false));
+  }, [refreshStats]);
 
   /** The choice is a browser preference, not a login. */
-  function activateProfile(id: number) {
-    document.cookie = `${PROFILE_COOKIE}=${id}; path=/; max-age=31536000; samesite=lax`;
-    setActiveId(id);
+  async function activate(profile: StoredProfile) {
+    setActiveProfile(profile);
+    setActiveId(profile.id);
+    setError(null);
+    setNotice(null);
+    // Linking runs server-side: any game already stored for these accounts is
+    // attached immediately, which is why a second browser starts with a full
+    // library and nothing to re-import.
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sync: true }),
+    });
+    if (res.ok) {
+      const known = stats[profile.id]?.games ?? 0;
+      setNotice(
+        known > 0
+          ? `Now using ${profileLabel(profile)} — ${known} already-analysed game${known === 1 ? "" : "s"} are waiting.`
+          : `Now using ${profileLabel(profile)}.`
+      );
+    }
+    await refreshStats(profiles);
   }
 
   async function add() {
-    const lichess = addDraft.lichess_username.trim();
-    const chesscom = addDraft.chesscom_username.trim();
+    const lichess = addDraft.lichess.trim();
+    const chesscom = addDraft.chesscom.trim();
     if (!lichess && !chesscom) {
       setError("Add a Lichess or Chess.com username.");
       return;
@@ -115,22 +149,22 @@ export default function Profiles() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch("/api/profiles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lichess_username: lichess,
-          chesscom_username: chesscom,
-          display_name: addDraft.display_name,
-          lichessToken: addDraft.lichessToken,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `Could not add the profile (${res.status})`);
+      const profile = createProfile(
+        addDraft.name.trim(),
+        lichess,
+        chesscom,
+        addDraft.lichessToken.trim(),
+        addDraft.llm,
+        addDraft.defaultLlmId
+      );
+      const next = [...profiles, profile];
+      saveProfiles(next);
+      setProfiles(next);
       setAddDraft(EMPTY_DRAFT);
-      await load();
-      activateProfile(Number(body.id));
-      setNotice("Profile added and switched to.");
+      setActiveProfile(profile);
+      setActiveId(profile.id);
+      await refreshStats(next);
+      setNotice("Profile added and switched to. It is stored in this browser only.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -138,20 +172,22 @@ export default function Profiles() {
     }
   }
 
-  function startEdit(p: Profile) {
+  function startEdit(p: StoredProfile) {
     setEditingId(p.id);
     setDraft({
-      display_name: p.display_name,
-      lichess_username: p.lichess_username,
-      chesscom_username: p.chesscom_username,
+      name: p.name,
+      lichess: p.lichess,
+      chesscom: p.chesscom,
       lichessToken: "",
+      llm: p.llm,
+      defaultLlmId: p.defaultLlmId,
     });
     setError(null);
     setNotice(null);
   }
 
-  async function saveEdit(id: number) {
-    if (!draft.lichess_username.trim() && !draft.chesscom_username.trim()) {
+  async function saveEdit(id: string) {
+    if (!draft.lichess.trim() && !draft.chesscom.trim()) {
       setError("A profile needs at least one Lichess or Chess.com username.");
       return;
     }
@@ -159,21 +195,23 @@ export default function Profiles() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/profiles/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          display_name: draft.display_name,
-          lichess_username: draft.lichess_username,
-          chesscom_username: draft.chesscom_username,
-          // Omitted when blank, so editing a name cannot wipe a stored token.
-          ...(draft.lichessToken.trim() ? { lichessToken: draft.lichessToken } : {}),
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `Could not save the profile (${res.status})`);
+      const existing = profiles.find((p) => p.id === id);
+      const updated: StoredProfile = {
+        id,
+        name: draft.name.trim(),
+        lichess: draft.lichess.trim(),
+        chesscom: draft.chesscom.trim(),
+        // A blank field keeps the stored token, so renaming cannot wipe it.
+        token: draft.lichessToken.trim() || existing?.token || "",
+        llm: draft.llm,
+        defaultLlmId: draft.defaultLlmId,
+      };
+      const next = profiles.map((p) => (p.id === id ? updated : p));
+      saveProfiles(next);
+      setProfiles(next);
+      refreshCookie(updated);
       setEditingId(null);
-      await load();
+      await refreshStats(next);
       setNotice("Profile updated.");
     } catch (e) {
       setError((e as Error).message);
@@ -182,40 +220,43 @@ export default function Profiles() {
     }
   }
 
-  async function clearToken(p: Profile) {
-    if (!window.confirm(`Remove the saved Lichess token for ${label(p)}?`)) return;
+  function clearToken(p: StoredProfile) {
+    if (!window.confirm(`Remove the saved Lichess token for ${profileLabel(p)}?`)) return;
+    const next = profiles.map((x) => (x.id === p.id ? { ...x, token: "" } : x));
+    saveProfiles(next);
+    setProfiles(next);
     setError(null);
-    setNotice(null);
-    try {
-      const res = await fetch(`/api/profiles/${p.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lichessToken: "" }),
-      });
-      if (!res.ok) throw new Error(`Could not clear the token (${res.status})`);
-      await load();
-      setNotice("Saved token removed.");
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    setNotice("Saved token removed. Imports from this browser go back to the anonymous limits.");
   }
 
-  async function remove(p: Profile) {
-    const owned = p.games > 0 ? ` and its ${p.games} imported game${p.games === 1 ? "" : "s"}` : "";
-    if (!window.confirm(`Delete ${label(p)}${owned}? This cannot be undone.`)) return;
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await fetch(`/api/profiles/${p.id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Could not delete the profile (${res.status})`);
-      }
-      if (editingId === p.id) setEditingId(null);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
+  function remove(p: StoredProfile) {
+    const owned = stats[p.id]?.games ?? 0;
+    const detail = owned > 0 ? ` It will stop showing its ${owned} game${owned === 1 ? "" : "s"}.` : "";
+    if (
+      !window.confirm(
+        `Remove ${profileLabel(p)} from this browser?${detail} The analysed games stay on the server, and adding the account again brings them straight back.`
+      )
+    ) {
+      return;
     }
+    const next = profiles.filter((x) => x.id !== p.id);
+    saveProfiles(next);
+    setProfiles(next);
+    if (editingId === p.id) setEditingId(null);
+    if (activeId === p.id) {
+      // Fall back to whoever is left, or to nobody.
+      clearActiveProfile();
+      const fallback = next[0] ?? null;
+      if (fallback) {
+        setActiveProfile(fallback);
+        setActiveId(fallback.id);
+      } else {
+        setActiveId(null);
+      }
+    }
+    setError(null);
+    setNotice("Removed from this browser.");
+    void refreshStats(next);
   }
 
   return (
@@ -223,9 +264,9 @@ export default function Profiles() {
       <div>
         <h1 className="text-2xl font-bold">Profiles</h1>
         <p className="text-sm text-zinc-400">
-          Everyone keeps their own library. A profile can hold a Lichess account, a Chess.com
-          account, or both — imports from either land in the same library. Open the app as
-          whoever you are and every other tab follows.
+          Profiles are kept in <span className="text-zinc-200">this browser</span>, not on the
+          server. A profile can hold a Lichess account, a Chess.com account, or both — imports from
+          either land in the same library, and every other tab follows whoever is active.
         </p>
       </div>
 
@@ -248,8 +289,8 @@ export default function Profiles() {
           <label className="block text-sm">
             <span className="text-zinc-300">Lichess username</span>
             <input
-              value={addDraft.lichess_username}
-              onChange={(e) => setAddDraft((d) => ({ ...d, lichess_username: e.target.value }))}
+              value={addDraft.lichess}
+              onChange={(e) => setAddDraft((d) => ({ ...d, lichess: e.target.value }))}
               placeholder="e.g. Rooronoa"
               className={FIELD}
             />
@@ -257,8 +298,8 @@ export default function Profiles() {
           <label className="block text-sm">
             <span className="text-zinc-300">Chess.com username</span>
             <input
-              value={addDraft.chesscom_username}
-              onChange={(e) => setAddDraft((d) => ({ ...d, chesscom_username: e.target.value }))}
+              value={addDraft.chesscom}
+              onChange={(e) => setAddDraft((d) => ({ ...d, chesscom: e.target.value }))}
               placeholder="e.g. Rooronoa_HaD"
               className={FIELD}
             />
@@ -266,8 +307,8 @@ export default function Profiles() {
           <label className="block text-sm">
             <span className="text-zinc-300">Display name (optional)</span>
             <input
-              value={addDraft.display_name}
-              onChange={(e) => setAddDraft((d) => ({ ...d, display_name: e.target.value }))}
+              value={addDraft.name}
+              onChange={(e) => setAddDraft((d) => ({ ...d, name: e.target.value }))}
               placeholder="What to call this player"
               className={FIELD}
             />
@@ -288,10 +329,22 @@ export default function Profiles() {
             <TokenHint />
           </label>
         </div>
+        <div className="mt-4 border-t border-zinc-800 pt-4">
+          <h3 className="mb-2 text-sm font-semibold text-zinc-200">AI analysis providers</h3>
+          <p className="mb-3 text-xs text-zinc-400">
+            Optional. Stockfish analysis is always available; a provider adds an AI coach when you
+            ask for one on the review screen. Keys are saved in this browser with the profile.
+          </p>
+          <LlmConnections
+            idPrefix="add"
+            connections={addDraft.llm}
+            defaultId={addDraft.defaultLlmId}
+            onChange={(llm, defaultLlmId) => setAddDraft((d) => ({ ...d, llm, defaultLlmId }))}
+          />
+        </div>
         <p className="mt-2 text-xs text-zinc-400">
-          Fill in either username, or both. Tokens are stored against the profile and are never
-          sent back to the browser — the app only ever reports whether one is set, so removing one
-          is a deliberate action on its row below.
+          Fill in either username, or both. The token is saved with <em>this</em> profile, in this
+          browser, and means Lichess imports are not throttled.
         </p>
         <button type="button" onClick={add} disabled={adding} className={`mt-3 ${PRIMARY}`}>
           {adding ? "Adding…" : "Add profile"}
@@ -300,28 +353,28 @@ export default function Profiles() {
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Everyone</h2>
-          <label className="text-sm">
-            <span className="sr-only">Search profiles</span>
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search usernames…"
-              className="min-h-11 w-56 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-zinc-100 placeholder:text-zinc-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
-            />
-          </label>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
+            On this browser
+          </h2>
+          {deploymentTokenSet ? (
+            <span className="text-xs text-zinc-400">
+              The deployment supplies its own Lichess token as a fallback
+            </span>
+          ) : null}
         </div>
 
         {loading ? (
           <p className="py-6 text-center text-sm text-zinc-400">Loading profiles…</p>
         ) : profiles.length === 0 ? (
           <p className="py-6 text-center text-sm text-zinc-400">
-            {debouncedQ ? `No profile matches “${debouncedQ}”.` : "No profiles yet — add the first one above."}
+            No profiles in this browser yet — add the first one above.
           </p>
         ) : (
           <ul className="divide-y divide-zinc-800">
             {profiles.map((p) => {
               const active = p.id === activeId;
+              const own = stats[p.id];
+              const defaultLlm = p.llm.find((c) => c.id === p.defaultLlmId) ?? p.llm[0] ?? null;
 
               if (editingId === p.id) {
                 return (
@@ -333,7 +386,7 @@ export default function Profiles() {
                       }}
                     >
                       <div className="mb-3 flex items-center gap-2">
-                        <span className="text-sm font-semibold text-zinc-100">Editing {label(p)}</span>
+                        <span className="text-sm font-semibold text-zinc-100">Editing {profileLabel(p)}</span>
                         {active ? (
                           <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
                             you
@@ -344,8 +397,8 @@ export default function Profiles() {
                         <label className="block text-sm">
                           <span className="text-zinc-300">Lichess username</span>
                           <input
-                            value={draft.lichess_username}
-                            onChange={(e) => setDraft((d) => ({ ...d, lichess_username: e.target.value }))}
+                            value={draft.lichess}
+                            onChange={(e) => setDraft((d) => ({ ...d, lichess: e.target.value }))}
                             className={FIELD}
                             autoFocus
                           />
@@ -353,16 +406,16 @@ export default function Profiles() {
                         <label className="block text-sm">
                           <span className="text-zinc-300">Chess.com username</span>
                           <input
-                            value={draft.chesscom_username}
-                            onChange={(e) => setDraft((d) => ({ ...d, chesscom_username: e.target.value }))}
+                            value={draft.chesscom}
+                            onChange={(e) => setDraft((d) => ({ ...d, chesscom: e.target.value }))}
                             className={FIELD}
                           />
                         </label>
                         <label className="block text-sm">
                           <span className="text-zinc-300">Display name</span>
                           <input
-                            value={draft.display_name}
-                            onChange={(e) => setDraft((d) => ({ ...d, display_name: e.target.value }))}
+                            value={draft.name}
+                            onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                             className={FIELD}
                           />
                         </label>
@@ -374,8 +427,8 @@ export default function Profiles() {
                             type="password"
                             autoComplete="off"
                             placeholder={
-                              p.lichessTokenSet
-                                ? "A token is saved — leave blank to reuse it"
+                              p.token
+                                ? "A token is saved — leave blank to keep it"
                                 : "Paste a personal API token"
                             }
                             className={FIELD}
@@ -383,9 +436,23 @@ export default function Profiles() {
                           <TokenHint />
                         </label>
                       </div>
+                      <div className="mt-4 border-t border-zinc-800 pt-4">
+                        <h4 className="mb-2 text-sm font-semibold text-zinc-200">
+                          AI analysis providers
+                        </h4>
+                        <LlmConnections
+                          idPrefix={`edit-${p.id}`}
+                          connections={draft.llm}
+                          defaultId={draft.defaultLlmId}
+                          onChange={(llm, defaultLlmId) =>
+                            setDraft((d) => ({ ...d, llm, defaultLlmId }))
+                          }
+                        />
+                      </div>
                       <p className="mt-2 text-xs text-zinc-400">
-                        Existing games keep the profile they were imported under, so changing a
-                        username here does not move or re-attribute anything.
+                        Games are stored against the account, not the profile, so adding a username
+                        that already has games brings its analysis back instantly. Removing one only
+                        stops this browser listing it.
                       </p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button type="submit" disabled={saving} className={PRIMARY}>
@@ -398,15 +465,6 @@ export default function Profiles() {
                         >
                           Cancel
                         </button>
-                        {p.lichessTokenSet ? (
-                          <button
-                            type="button"
-                            onClick={() => clearToken(p)}
-                            className={`${BTN} border-zinc-800 text-zinc-400 hover:border-rose-900 hover:text-rose-300`}
-                          >
-                            Remove saved token
-                          </button>
-                        ) : null}
                       </div>
                     </form>
                   </li>
@@ -417,7 +475,7 @@ export default function Profiles() {
                 <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
                   <div className="min-w-48 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-zinc-100">{label(p)}</span>
+                      <span className="font-semibold text-zinc-100">{profileLabel(p)}</span>
                       {active ? (
                         <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
                           you
@@ -425,14 +483,22 @@ export default function Profiles() {
                       ) : null}
                     </div>
                     <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-zinc-400">
-                      {p.lichess_username ? <span>Lichess · {p.lichess_username}</span> : null}
-                      {p.chesscom_username ? <span>Chess.com · {p.chesscom_username}</span> : null}
-                      {!p.lichess_username && !p.chesscom_username ? <span>No accounts linked</span> : null}
-                      <span>
-                        {p.games} game{p.games === 1 ? "" : "s"}
-                        {p.analyzed ? `, ${p.analyzed} analysed` : ""}
-                      </span>
-                      {p.lichessTokenSet ? <span>token saved</span> : null}
+                      {p.lichess ? <span>Lichess · {p.lichess}</span> : null}
+                      {p.chesscom ? <span>Chess.com · {p.chesscom}</span> : null}
+                      {!p.lichess && !p.chesscom ? <span>No accounts linked</span> : null}
+                      {own ? (
+                        <span>
+                          {own.games} game{own.games === 1 ? "" : "s"}
+                          {own.analyzed ? `, ${own.analyzed} analysed` : ""}
+                        </span>
+                      ) : null}
+                      {p.token ? <span className="text-emerald-400">token saved</span> : null}
+                      {defaultLlm ? (
+                        <span className="text-indigo-300">
+                          AI · {connectionLabel(defaultLlm)}
+                          {p.llm.length > 1 ? ` +${p.llm.length - 1}` : ""}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                   <button
@@ -442,9 +508,18 @@ export default function Profiles() {
                   >
                     Edit
                   </button>
+                  {p.token ? (
+                    <button
+                      type="button"
+                      onClick={() => clearToken(p)}
+                      className={`${BTN} border-zinc-800 text-zinc-400 hover:border-rose-900 hover:text-rose-300`}
+                    >
+                      Forget token
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => activateProfile(p.id)}
+                    onClick={() => void activate(p)}
                     disabled={active}
                     className={`${BTN} ${active ? "border-zinc-800 text-zinc-500" : "border-zinc-700 text-zinc-200 hover:bg-zinc-800"}`}
                   >
@@ -455,13 +530,32 @@ export default function Profiles() {
                     onClick={() => remove(p)}
                     className={`${BTN} border-zinc-800 text-zinc-400 hover:border-rose-900 hover:text-rose-300`}
                   >
-                    Delete
+                    Remove
                   </button>
                 </li>
               );
             })}
           </ul>
         )}
+      </section>
+
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-400">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-400">
+          How this works
+        </h2>
+        <p>
+          A profile is a preference in this browser, not an account. Games are stored against the
+          Lichess or Chess.com username they were played under, so the same account set up anywhere
+          gets the same games and the same engine analysis — the second browser never re-imports or
+          re-analyses anything.
+        </p>
+        <p className="mt-2">{TOKEN_NOTE}</p>
+        <p className="mt-2">
+          AI provider keys work the same way. They live in this browser with the profile, and a key
+          is sent to the server only inside the one AI request that uses it — the server keeps no
+          provider, model or key of its own. Removing a provider here removes it everywhere it
+          appears for this profile.
+        </p>
       </section>
     </div>
   );

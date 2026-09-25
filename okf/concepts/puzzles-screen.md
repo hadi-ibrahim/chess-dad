@@ -22,10 +22,15 @@ sources:
 
 The training screen (`/puzzles`) drills the positions the player got wrong. Each
 puzzle carries its `fen`, the engine's `solution_uci` and `solution_san`, its
-motif tag (`theme`), its spaced-repetition state, and the game it came from. The
-list endpoint joins the source game and the source `positions` row, so a drill can
-also show the coach's `explanation` and `key_lesson` for the mistake it was built
-from.
+motif tag (`theme`), the `color` whose move it was, and the game it came from —
+plus **this account's** spaced-repetition state, which is joined in per viewer so
+a drill shared with an opponent still has a private schedule. The list endpoint
+joins the source game and the source `positions` row, so a drill can also show the
+coach's `explanation` and `key_lesson` for the mistake it was built from.
+
+Only drills from the side the viewer played are listed: the puzzles themselves are
+derived once for both players of a game, so an opponent who signs in finds their
+half already waiting.
 
 # Choosing what to drill
 
@@ -106,10 +111,11 @@ below the fold. A session line counts clean solves and hinted solves as you go.
 
 # Known limits
 
-The motif filter runs client-side over the whole `GET /api/puzzles` payload (1,842
-rows), so changing category costs no round trip but the payload grows with the
-library. The theme chip is visible before the attempt, which gives the answer class
-away. There is no session boundary: the queue is every due drill (1,828 of them),
-so "done" has no shape, and the rail renders 60 rows at a time behind **Show
-more**.
+The motif filter runs client-side over the whole `GET /api/puzzles` payload, so
+changing category costs no round trip but the payload grows with the library — and
+because drills are derived for both sides of every analysed game, that library is
+shared and larger than one player's own mistakes. The theme chip is visible before
+the attempt, which gives the answer class away. There is no session boundary: the
+queue is every due drill, so "done" has no shape, and the rail renders 60 rows at
+a time behind **Show more**.
 

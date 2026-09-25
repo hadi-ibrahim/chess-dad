@@ -39,8 +39,9 @@ computed from the change in **win probability** caused by the move.
 
    where `loss` is the drop in win probability, in percentage points.
 
-3. Game accuracy is the average over the player's own moves (a checkmating move
-   scores 100).[^lichess-accuracy]
+3. Game accuracy is the average over **each side's own moves** (a checkmating move
+   scores 100), stored per side as `accuracy_white`/`accuracy_black`. A game does
+   not belong to one player: whoever held a colour reads that colour's number.[^lichess-accuracy]
 
 [^lichess-accuracy]: The exponential accuracy formula is the one documented by
   Lichess; Chess Dad reuses it under the same open spirit.

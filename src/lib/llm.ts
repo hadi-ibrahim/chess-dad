@@ -1,8 +1,86 @@
 import "server-only";
+import { Chess } from "chess.js";
 import { config } from "./config";
-import { getLlmCache, setLlmCache } from "./db";
+import { getAiExplanation, setAiExplanation } from "./db";
 import { readCoachingRules } from "./okf";
+import { log } from "./log";
+import {
+  providerMeta,
+  type AiExplanationKey,
+  type LlmConnection,
+} from "./llm-providers";
 import type { LLMExplanation } from "./types";
+
+/**
+ * Two coaches, one rule.
+ *
+ * 1. **The engine coach is the baseline.** `fallbackExplain` is deterministic,
+ *    offline and free. It is what every initial analysis writes into
+ *    `positions.explanation`, so a library is fully explained with no API key in
+ *    sight.
+ * 2. **AI is an extra reading, on request.** `aiExplainPosition` calls a provider
+ *    the *user* configured with the key that lives in *their* browser. It never
+ *    replaces the engine text; it is stored beside it, so the same position can
+ *    carry Claude's reading and GPT's at once.
+ *
+ * The invariant is unchanged in both: the engine is ground truth and the model
+ * only explains it. Generated text that names an impossible move is discarded
+ * before it can be cached or shown.
+ */
+
+/**
+ * Token accounting.
+ *
+ * The only part of the app that costs money per use. Every provider call logs its
+ * token counts and a running total, so "what did that cost?" has an answer.
+ */
+export interface LlmUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+const usageGlobal = globalThis as unknown as { __chessdadLlmUsage?: LlmUsage };
+
+/** Cumulative token usage for this process. */
+export function llmUsage(): LlmUsage {
+  usageGlobal.__chessdadLlmUsage ??= {
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+  };
+  return usageGlobal.__chessdadLlmUsage;
+}
+
+interface TokenCounts {
+  prompt?: number;
+  completion?: number;
+  total?: number;
+}
+
+function recordUsage(provider: string, model: string, tokens: TokenCounts): void {
+  const usage = llmUsage();
+  const promptTokens = tokens.prompt ?? 0;
+  const completionTokens = tokens.completion ?? 0;
+  const totalTokens = tokens.total ?? promptTokens + completionTokens;
+
+  usage.calls += 1;
+  usage.promptTokens += promptTokens;
+  usage.completionTokens += completionTokens;
+  usage.totalTokens += totalTokens;
+
+  log.info("llm: call", {
+    provider,
+    model,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cumulativeCalls: usage.calls,
+    cumulativeTokens: usage.totalTokens,
+  });
+}
 
 export interface ExplainInput {
   fen: string;
@@ -22,7 +100,17 @@ Rules:
 - Explain the human idea ("why"), not just parrot the move.
 - Use plain language suitable for a player rated about ${rating} (lichess/chess.com rating).
 - 2-3 sentences, conversational, never condescending.
-- Output strict JSON with exactly three string fields: "explanation", "key_lesson", "drill_suggestion".`;
+- Output strict JSON with exactly three string fields: "explanation", "key_lesson", "drill_suggestion".
+
+Accuracy about the board, in priority order:
+- You may only name a move that is legal in the position you were given. Before naming a
+  capture, a check, or a threat, satisfy yourself that the move is legal there. A wrong
+  square or a piece that cannot reach it is worse than saying nothing.
+- If you are not certain a specific move is legal, describe the idea without naming the
+  move ("the rook was undefended and could be taken"). Never invent a tactic.
+- Prefer the moves you were given (the move played and the engine's choice) over moves you
+  infer. They are the only ones you can rely on.
+- Do not claim a line continues in a particular way unless you can see it is forced.`;
 
 function buildUserPrompt(i: ExplainInput): string {
   return [
@@ -39,56 +127,69 @@ function buildUserPrompt(i: ExplainInput): string {
   ].join("\n");
 }
 
-async function deepseekExplain(i: ExplainInput): Promise<LLMExplanation> {
-  const url = `${config.deepseekBaseUrl}/chat/completions`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.deepseekApiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.deepseekModel,
-      messages: [
-        { role: "system", content: SYSTEM(i.rating) },
-        { role: "user", content: buildUserPrompt(i) },
-      ],
-      temperature: 0.4,
-      response_format: { type: "json_object" },
-    }),
-    signal: AbortSignal.timeout(config.llmTimeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`DeepSeek API error ${res.status}: ${await res.text()}`);
-  }
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const content = data.choices?.[0]?.message?.content ?? "{}";
-  return parseExplanation(content);
-}
+/**
+ * Moves named in generated text that cannot actually be played.
+ *
+ * The app's stated principle is that the model explains engine output and cannot
+ * hallucinate chess facts. It can. Measured over 25 freshly generated
+ * explanations, **3 of the 21 that named a move contained an illegal one** (~14%),
+ * and every failure had the same shape — a "they can simply take it" claim where
+ * the capturing piece could not reach the square:
+ *
+ *   * "White's knight on e2 can simply take it with Nxd5" — no knight on e2, and
+ *     the only knight (c3) cannot capture on an empty d5;
+ *   * "trades queens — after Qxb3 axb3" — e5 to b3 is not a queen move;
+ *   * "take your queen with Nxc2 or Nxd3" — from c4 neither is a knight move.
+ *
+ * A wrong tactic stated confidently is worse than a plainer true sentence, so an
+ * explanation that fails this check is discarded.
+ *
+ * Deliberately conservative, to avoid discarding good explanations:
+ *   * only unambiguous MOVE tokens are judged, so a bare square reference
+ *     ("your queen on b5") is not mistaken for a named move — this under-reports;
+ *   * a move is accepted if it is legal in the given position, or after the played
+ *     move, or after the engine's move, so legitimate continuations pass.
+ */
+const MOVE_TOKEN =
+  /\b(?:O-O-O|O-O|[KQRBN][a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|[a-h]x[a-h][1-8](?:=[QRBN])?[+#]?)\b/g;
 
-async function ollamaExplain(i: ExplainInput): Promise<LLMExplanation> {
-  const url = `${config.ollamaBaseUrl}/api/chat`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: config.ollamaModel,
-      messages: [
-        { role: "system", content: SYSTEM(i.rating) },
-        { role: "user", content: buildUserPrompt(i) },
-      ],
-      format: "json",
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(config.llmTimeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`Ollama error ${res.status}: ${await res.text()}`);
+export function illegalMovesNamed(
+  text: string,
+  fen: string,
+  playedSan: string,
+  bestSan: string
+): string[] {
+  const named = [...new Set(text.match(MOVE_TOKEN) ?? [])];
+  if (named.length === 0) return [];
+
+  const legal = new Set<string>();
+  let parsed = false;
+  const collect = (position: string) => {
+    try {
+      for (const m of new Chess(position).moves({ verbose: true })) legal.add(m.san);
+      parsed = true;
+    } catch {
+      // A position that will not parse cannot reject anything.
+    }
+  };
+
+  collect(fen);
+  // If the position itself is unreadable there is no basis to judge, so judge
+  // nothing rather than rejecting every move the text happens to name.
+  if (!parsed) return [];
+
+  for (const move of [playedSan, bestSan]) {
+    if (!move) continue;
+    try {
+      const after = new Chess(fen);
+      after.move(move);
+      collect(after.fen());
+    } catch {
+      // The caller's move may be unplayable in isolation; the base position stands.
+    }
   }
-  const data = (await res.json()) as { message?: { content?: string } };
-  return parseExplanation(data.message?.content ?? "{}");
+
+  return named.filter((token) => !legal.has(token));
 }
 
 function parseExplanation(content: string): LLMExplanation {
@@ -145,10 +246,14 @@ const MOTIF_TOPICS: Record<string, string> = {
 };
 
 /**
- * Deterministic, offline coaching fallback grounded in the OKF knowledge base.
+ * Deterministic, offline coaching grounded in the OKF knowledge base.
  * Always available; keeps explanations working with no API key.
+ *
+ * Exported for testing: this text is user-visible on every review screen, and it
+ * has shipped nonsense before ("the engine preferred Kh8 instead of Kh8" on a
+ * forced move where the player and the engine agreed).
  */
-function fallbackExplain(i: ExplainInput): LLMExplanation {
+export function fallbackExplain(i: ExplainInput): LLMExplanation {
   const rules = readCoachingRules();
   const lostPawns = Math.max(0, (i.evalBeforeCp - i.evalAfterCp) / 100).toFixed(1);
   const cls = i.classification;
@@ -162,11 +267,21 @@ function fallbackExplain(i: ExplainInput): LLMExplanation {
           ? "missed a winning chance"
           : cls === "inaccuracy"
             ? "played an inaccuracy"
-            : "chose a suboptimal move";
+            : cls === "forced"
+              ? "had only one legal move"
+              : cls === "book"
+                ? "played a book move"
+                : "chose a suboptimal move";
 
-  const bestPhrase = i.bestSan
-    ? `The engine preferred ${i.bestSan} instead of ${i.playedSan || "your move"}.`
-    : "";
+  // Never compare a move to itself: "the engine preferred Kh8 instead of Kh8" was
+  // real output, on a forced move where the player and the engine agreed. A
+  // *missing* played move is different — the engine's choice is still worth naming.
+  const agrees = Boolean(i.playedSan) && i.playedSan === i.bestSan;
+  const bestPhrase =
+    i.bestSan && !agrees
+      ? `The engine preferred ${i.bestSan} instead of ${i.playedSan || "your move"}.`
+      : "";
+
   // Mate scores are sentinels, not evaluations: "+999.98 to +999.98 (a 0.0-pawn
   // swing)" was nonsense that appeared in 242 stored explanations.
   const mateBefore = Math.abs(i.evalBeforeCp) >= MATE_CP;
@@ -216,24 +331,318 @@ function fallbackExplain(i: ExplainInput): LLMExplanation {
   };
 }
 
-export async function explainPosition(i: ExplainInput): Promise<LLMExplanation> {
-  const cached = getLlmCache(i.fen);
-  if (cached) return cached;
+// ---------------------------------------------------------------------------
+// AI providers
+// ---------------------------------------------------------------------------
 
-  let result: LLMExplanation;
+/**
+ * A failure the user can act on.
+ *
+ * `connection` means the provider could not be used at all (bad key, unreachable,
+ * rate-limited), so trying the next position would fail identically and the route
+ * stops. `content` means the call worked but the answer was unusable (empty text,
+ * an invented move), so the next position is still worth trying.
+ */
+export class AiRequestError extends Error {
+  readonly kind: "connection" | "content";
+  constructor(message: string, kind: "connection" | "content" = "connection") {
+    super(message);
+    this.name = "AiRequestError";
+    this.kind = kind;
+  }
+}
+
+/** Defensive: a provider must never be able to echo a key into an error we show. */
+function redact(value: string, secret: string): string {
+  if (!secret) return value;
+  return value.split(secret).join("[redacted]");
+}
+
+async function postJson(
+  url: string,
+  init: RequestInit,
+  secret: string,
+  label: string
+): Promise<unknown> {
+  let res: Response;
   try {
-    if (config.llmProvider === "deepseek" && config.deepseekApiKey) {
-      result = await deepseekExplain(i);
-    } else if (config.llmProvider === "ollama") {
-      result = await ollamaExplain(i);
-    } else {
-      result = fallbackExplain(i);
+    res = await fetch(url, init);
+  } catch (e) {
+    const err = e as Error;
+    const message =
+      err.name === "TimeoutError"
+        ? `${label} did not answer within ${Math.round(config.llmTimeoutMs / 1000)}s.`
+        : `${label} could not be reached: ${redact(err.message, secret)}`;
+    throw new AiRequestError(message, "connection");
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 400);
+    } catch {
+      // A body we cannot read is not worth a second failure.
     }
+    throw new AiRequestError(
+      `${label} API error ${res.status}${detail ? `: ${redact(detail, secret)}` : ""}`,
+      "connection"
+    );
+  }
+  try {
+    return (await res.json()) as unknown;
   } catch {
-    // Any LLM failure degrades gracefully to the deterministic coach.
-    result = fallbackExplain(i);
+    throw new AiRequestError(`${label} returned a response that was not JSON.`, "connection");
+  }
+}
+
+interface ProviderReply {
+  text: string;
+  model: string;
+}
+
+/**
+ * Send one position to one provider.
+ *
+ * This is the only place the app fetches a host derived from user input, and it
+ * is reached only after `sanitizeConnection()` has validated the URL — see
+ * `llm-providers.ts`.
+ */
+async function callProvider(connection: LlmConnection, i: ExplainInput): Promise<ProviderReply> {
+  const meta = providerMeta(connection.provider);
+  if (!meta) throw new AiRequestError("Unknown provider.", "connection");
+
+  const model = (connection.model || meta.defaultModel).trim();
+  const system = SYSTEM(i.rating);
+  const user = buildUserPrompt(i);
+  const base = (connection.baseUrl || meta.defaultBaseUrl || "").replace(/\/+$/, "");
+  const signal = AbortSignal.timeout(config.llmTimeoutMs);
+
+  switch (meta.kind) {
+    case "openai": {
+      const body: Record<string, unknown> = {
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        // Thinking mode silently ignores `temperature`, so it is only sent when it
+        // will actually be honoured rather than pretending to control sampling.
+        ...(meta.supportsThinkingToggle && connection.thinking ? {} : { temperature: 0.4 }),
+      };
+      // DeepSeek turns reasoning ON by default upstream and its length is
+      // unbounded: one measured call returned 24,699 reasoning tokens over 119s,
+      // billed as output and past any sane timeout. Off unless asked for.
+      if (meta.supportsThinkingToggle && !connection.thinking) {
+        body.thinking = { type: "disabled" };
+      }
+      if (meta.supportsJsonMode) body.response_format = { type: "json_object" };
+
+      const data = (await postJson(
+        `${base}/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(connection.apiKey ? { Authorization: `Bearer ${connection.apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
+          signal,
+        },
+        connection.apiKey,
+        meta.label
+      )) as {
+        choices?: { message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      recordUsage(meta.id, model, {
+        prompt: data.usage?.prompt_tokens,
+        completion: data.usage?.completion_tokens,
+        total: data.usage?.total_tokens,
+      });
+      return { text: data.choices?.[0]?.message?.content ?? "", model };
+    }
+
+    case "anthropic": {
+      const data = (await postJson(
+        `${base}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": connection.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            temperature: 0.4,
+            system,
+            messages: [{ role: "user", content: user }],
+          }),
+          signal,
+        },
+        connection.apiKey,
+        meta.label
+      )) as {
+        content?: { type?: string; text?: string }[];
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      recordUsage(meta.id, model, {
+        prompt: data.usage?.input_tokens,
+        completion: data.usage?.output_tokens,
+      });
+      const text = (data.content ?? [])
+        .filter((block) => block.type === "text")
+        .map((block) => block.text ?? "")
+        .join("")
+        .trim();
+      return { text, model };
+    }
+
+    case "google": {
+      const data = (await postJson(
+        `${base}/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          // A header, never `?key=`: a URL is the easiest thing to end up in a log.
+          headers: { "Content-Type": "application/json", "x-goog-api-key": connection.apiKey },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: "user", parts: [{ text: user }] }],
+            generationConfig: {
+              temperature: 0.4,
+              responseMimeType: "application/json",
+            },
+          }),
+          signal,
+        },
+        connection.apiKey,
+        meta.label
+      )) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        usageMetadata?: {
+          promptTokenCount?: number;
+          candidatesTokenCount?: number;
+          totalTokenCount?: number;
+        };
+      };
+      recordUsage(meta.id, model, {
+        prompt: data.usageMetadata?.promptTokenCount,
+        completion: data.usageMetadata?.candidatesTokenCount,
+        total: data.usageMetadata?.totalTokenCount,
+      });
+      const text = (data.candidates?.[0]?.content?.parts ?? [])
+        .map((part) => part.text ?? "")
+        .join("")
+        .trim();
+      return { text, model };
+    }
+
+    case "ollama": {
+      const data = (await postJson(
+        `${base}/api/chat`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+            format: "json",
+            stream: false,
+          }),
+          signal,
+        },
+        "",
+        meta.label
+      )) as {
+        message?: { content?: string };
+        prompt_eval_count?: number;
+        eval_count?: number;
+      };
+      recordUsage(meta.id, model, {
+        prompt: data.prompt_eval_count,
+        completion: data.eval_count,
+      });
+      return { text: data.message?.content ?? "", model };
+    }
+  }
+}
+
+export interface AiExplainResult extends LLMExplanation {
+  provider: string;
+  model: string;
+  /** True when this exact provider+model already had an answer for the position. */
+  cached: boolean;
+}
+
+/**
+ * Explain one position with one provider connection.
+ *
+ * A cache hit for the *same* provider and model is free and returns immediately,
+ * which is what makes re-analysing a game cheap. A different model is a different
+ * call, and the two answers coexist — that is how a user compares providers.
+ */
+export async function aiExplainPosition(
+  i: ExplainInput,
+  connection: LlmConnection,
+  key: AiExplanationKey
+): Promise<AiExplainResult> {
+  const meta = providerMeta(connection.provider);
+  const model = (connection.model || meta?.defaultModel || "").trim();
+
+  const cached = getAiExplanation(key, connection.provider, model);
+  if (cached) {
+    return {
+      explanation: cached.explanation,
+      key_lesson: cached.key_lesson,
+      drill_suggestion: cached.drill_suggestion,
+      provider: cached.provider,
+      model: cached.model,
+      cached: true,
+    };
   }
 
-  setLlmCache(i.fen, result.explanation, result.key_lesson, result.drill_suggestion, config.llmProvider);
-  return result;
+  const reply = await callProvider(connection, i);
+  const parsed = parseExplanation(reply.text);
+  if (!parsed.explanation || parsed.explanation === "No explanation available.") {
+    throw new AiRequestError(
+      `${meta?.label ?? connection.provider} returned no explanation.`,
+      "content"
+    );
+  }
+
+  // A confidently wrong tactic is worse than a plainer true sentence, and unlike
+  // the offline coach there is no second text to fall back to — the engine coach
+  // is already on screen. So the answer is refused rather than stored.
+  const invented = illegalMovesNamed(parsed.explanation, i.fen, i.playedSan, i.bestSan);
+  if (invented.length > 0) {
+    log.warn("ai: explanation named moves that are not legal here — discarded", {
+      invented,
+      fen: i.fen,
+      playedSan: i.playedSan,
+      bestSan: i.bestSan,
+      provider: connection.provider,
+      model,
+    });
+    throw new AiRequestError(
+      "The model named moves that are not legal in this position, so its answer was discarded.",
+      "content"
+    );
+  }
+
+  setAiExplanation({
+    fen: key.fen,
+    played_uci: key.playedUci,
+    classification: key.classification,
+    rating_band: key.ratingBand,
+    provider: connection.provider,
+    model,
+    explanation: parsed.explanation,
+    key_lesson: parsed.key_lesson,
+    drill_suggestion: parsed.drill_suggestion,
+  });
+
+  return { ...parsed, provider: connection.provider, model, cached: false };
 }

@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
-import { getGame, getPositions, deleteGame } from "@/lib/db";
+import { getLibraryGame, getPositions, groupAiExplanations, listAiExplanationsForFens, unlinkGame } from "@/lib/db";
+import { viewerOf } from "@/lib/library";
 import { parsePgn } from "@/lib/chess-core";
+import { aiKeyFor } from "@/lib/ai-context";
+import { positionKeyString } from "@/lib/llm-providers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const game = getGame(Number(id));
+  const viewer = viewerOf(request);
+  // The game is only readable through one of the viewer's accounts: the review
+  // screen needs to know which side was theirs.
+  const game = viewer ? getLibraryGame(Number(id), viewer.scopes) : null;
   if (!game) {
     return NextResponse.json({ error: "Game not found" }, { status: 404 });
   }
@@ -43,13 +49,45 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     }));
   }
 
-  return NextResponse.json({ game, positions });
+  // Every AI reading of any position in this game, attached where it belongs.
+  //
+  // This is what lets the review show more than the newest answer: a position can
+  // carry Claude's reading from last week and GPT's from today, and the screen
+  // offers both. Most positions have none, so the map is almost always tiny.
+  const aiByPosition = groupAiExplanations(
+    listAiExplanationsForFens(positions.map((p) => p.fen))
+  );
+  const withAi = positions.map((p) => {
+    const rows = aiByPosition.get(positionKeyString(aiKeyFor(game, p)));
+    if (!rows || rows.length === 0) return p;
+    return {
+      ...p,
+      ai: rows.map((row) => ({
+        provider: row.provider,
+        model: row.model,
+        explanation: row.explanation,
+        key_lesson: row.key_lesson,
+        drill_suggestion: row.drill_suggestion,
+        created_at: row.created_at,
+      })),
+    };
+  });
+
+  return NextResponse.json({ game, positions: withAi });
 }
 
-export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * Remove the game from the acting profile's library.
+ *
+ * Its analysis is only destroyed once no other account references it, so
+ * deleting your copy never deletes an opponent's.
+ */
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const game = getGame(Number(id));
+  const viewer = viewerOf(request);
+  if (!viewer) return NextResponse.json({ error: "No profile is active" }, { status: 409 });
+  const game = getLibraryGame(Number(id), viewer.scopes);
   if (!game) return NextResponse.json({ error: "Game not found" }, { status: 404 });
-  deleteGame(Number(id));
+  unlinkGame(Number(id), viewer.scopes);
   return NextResponse.json({ ok: true });
 }

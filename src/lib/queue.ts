@@ -11,7 +11,16 @@ import { config } from "./config";
  * deliberately small so the storage could be swapped for Redis/BullMQ later.
  */
 
-export type JobType = "analyze" | "import";
+/**
+ * Only analysis is queued.
+ *
+ * Fetching games used to be a job too, so that it could run after the request
+ * ended — but that meant the worker needed the caller's Lichess token, and the
+ * only place to keep it between the two was server memory or a database row.
+ * Imports now run inside their own request (they take seconds), which lets the
+ * token live purely in the browser and be handed over per call.
+ */
+export type JobType = "analyze";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "canceled";
 
 export interface AnalyzePayload {
@@ -19,16 +28,6 @@ export interface AnalyzePayload {
   depth: number | null;
   explain: boolean;
   generatePuzzles: boolean;
-}
-
-export interface ImportPayload {
-  source: "lichess" | "chesscom";
-  username: string;
-  /** Which library the fetched games belong to. */
-  profileId: number;
-  max: number;
-  /** Queue analysis for the newly imported games once this job finishes. */
-  analyzeAfter: boolean;
 }
 
 export interface Job {
@@ -170,11 +169,15 @@ export function enqueueAnalyzeJobs(
   );
   const rows: NewJob[] = [];
   let skipped = 0;
+  // `active` only sees committed rows, so a repeated id *within this call* would
+  // otherwise be queued twice — two concurrent analyses of the same game.
+  const seen = new Set<number>();
   for (const gameId of gameIds) {
-    if (active.get(gameId)) {
+    if (seen.has(gameId) || active.get(gameId)) {
       skipped += 1;
       continue;
     }
+    seen.add(gameId);
     const payload: AnalyzePayload = {
       gameId,
       depth: opts.depth ?? null,
@@ -184,41 +187,6 @@ export function enqueueAnalyzeJobs(
     rows.push({ type: "analyze", payload, label: `game ${gameId}`, priority: 0 });
   }
   return { enqueued: insertJobs(rows).length, skipped };
-}
-
-/** Publish one import job for a profile. Skips a duplicate that is already pending. */
-export function enqueueImportJob(
-  source: "lichess" | "chesscom",
-  username: string,
-  max: number,
-  profileId: number,
-  opts: { analyzeAfter?: boolean } = {}
-): { jobId: number | null; skipped: boolean } {
-  const db = getDb();
-  const existing = db
-    .prepare(
-      `SELECT id FROM jobs
-       WHERE type='import' AND status IN ('queued','running')
-         AND json_extract(payload, '$.source') = ?
-         AND lower(json_extract(payload, '$.username')) = lower(?)
-         AND json_extract(payload, '$.profileId') = ?
-       LIMIT 1`
-    )
-    .get(source, username, profileId) as { id: number } | undefined;
-  if (existing) return { jobId: Number(existing.id), skipped: true };
-
-  const payload: ImportPayload = {
-    source,
-    username,
-    profileId,
-    max,
-    analyzeAfter: opts.analyzeAfter !== false,
-  };
-  // Imports are user-initiated, so they are claimed ahead of bulk analysis.
-  const [id] = insertJobs([
-    { type: "import", payload, label: `${source}: ${username}`, priority: 10 },
-  ]);
-  return { jobId: id ?? null, skipped: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +229,11 @@ export function heartbeatJob(id: number, leaseMs: number): void {
 
 export function setJobProgress(id: number, progress: number, stage: string): void {
   getDb()
-    .prepare("UPDATE jobs SET progress=?, stage=?, leased_until=datetime('now', ?) WHERE id=?")
+    // Guarded on status, like heartbeatJob: progress from a finishing job must not
+    // resurrect a finished row's lease or overwrite its stage.
+    .prepare(
+      "UPDATE jobs SET progress=?, stage=?, leased_until=datetime('now', ?) WHERE id=? AND status='running'"
+    )
     .run(
       Math.max(0, Math.min(1, progress)),
       stage,
@@ -382,7 +354,13 @@ export function clearFinishedJobs(): number {
 // Reading
 // ---------------------------------------------------------------------------
 
-export function getJobStats(): JobStats {
+/**
+ * Queue state, plus the game totals the dashboard shows.
+ *
+ * Pass `scopes` to count only the acting account's library; pass nothing for a
+ * deployment-wide count (the queue itself is always global).
+ */
+export function getJobStats(scopes: string[] | null = null): JobStats {
   const db = getDb();
   const totals = zero();
   const byType: Record<string, Counts> = {};
@@ -399,6 +377,13 @@ export function getJobStats(): JobStats {
     }
   }
 
+  const scoped = scopes != null;
+  const scopeList = scopes ?? [];
+  const scopeWhere = !scoped
+    ? ""
+    : scopeList.length
+      ? `WHERE scope IN (${scopeList.map(() => "?").join(",")})`
+      : "WHERE 0";
   const g = db
     .prepare(
       `SELECT
@@ -406,9 +391,9 @@ export function getJobStats(): JobStats {
          SUM(CASE WHEN analyzed=1 THEN 1 ELSE 0 END) AS analyzed,
          SUM(CASE WHEN analyzed=0 AND total_plies>0 THEN 1 ELSE 0 END) AS pending,
          SUM(CASE WHEN total_plies=0 THEN 1 ELSE 0 END) AS empty
-       FROM games`
+       FROM ${scoped ? "library_games" : "games"} ${scopeWhere}`
     )
-    .get() as Record<string, unknown>;
+    .get(...scopeList) as Record<string, unknown>;
 
   const active = db
     .prepare(
@@ -422,10 +407,12 @@ export function getJobStats(): JobStats {
         `SELECT DISTINCT json_extract(payload, '$.gameId') AS gameId
          FROM jobs WHERE type='analyze' AND status IN ('queued','running')`
       )
-      .all() as Record<string, unknown>[]
+      .all() as { gameId: unknown }[]
   )
-    .map((r) => Number(r.gameId))
-    .filter((n) => Number.isInteger(n));
+    // Type-checked rather than coerced: `Number(null)` is 0, and `Number.isInteger(0)`
+    // is true, so a job with no gameId used to be reported as "game 0".
+    .map((r) => r.gameId)
+    .filter((v): v is number => typeof v === "number" && Number.isInteger(v));
 
   return {
     jobs: totals,

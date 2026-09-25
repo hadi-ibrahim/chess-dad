@@ -2,10 +2,12 @@ import "server-only";
 import type { NewGame } from "../db";
 import type { Color, JobProgress, PlyInfo } from "../types";
 import { parsePgn } from "../chess-core";
-import { upsertGame, insertPositionIfMissing } from "../db";
+import { upsertGame, insertPositionIfMissing, linkGame } from "../db";
 import { fetchWithBackoff, USER_AGENT } from "../http";
 
-export interface ImportedGame extends Omit<NewGame, "profile_id"> {
+export interface ImportedGame extends NewGame {
+  /** Which seat the importing account had. The library link records it. */
+  player_color: Color;
   plies: PlyInfo[];
 }
 
@@ -70,9 +72,6 @@ function parseChessComGame(g: ChessComGame, username: string): ImportedGame | nu
     opening_name: headers.Opening || "",
     played_at: endTime ? endTime.toISOString() : null,
     player_color: color,
-    player_rating: color === "w" ? (g.white?.rating ?? null) : (g.black?.rating ?? null),
-    opponent: color === "w" ? black : white,
-    opponent_rating: color === "w" ? (g.black?.rating ?? null) : (g.white?.rating ?? null),
     total_plies: plies.length,
     plies,
   };
@@ -122,18 +121,18 @@ export async function fetchChessComGames(
 export async function importChessCom(
   username: string,
   max: number,
-  profileId: number,
+  scope: string,
   onProgress?: (info: JobProgress) => void
-): Promise<{ username: string; count: number; gameIds: number[] }> {
+): Promise<{ username: string; count: number; gameIds: number[]; linked: number }> {
   onProgress?.({ stage: "fetching", progress: 0.05 });
   const games = await fetchChessComGames(username, max, onProgress);
   onProgress?.({ stage: "parsed", progress: 0.35 });
 
   const gameIds: number[] = [];
+  let linked = 0;
   for (let i = 0; i < games.length; i++) {
     const g = games[i];
     const gameId = upsertGame({
-      profile_id: profileId,
       source: g.source,
       external_id: g.external_id,
       pgn: g.pgn,
@@ -147,12 +146,9 @@ export async function importChessCom(
       eco: g.eco,
       opening_name: g.opening_name,
       played_at: g.played_at,
-      player_color: g.player_color,
-      player_rating: g.player_rating,
-      opponent: g.opponent,
-      opponent_rating: g.opponent_rating,
       total_plies: g.total_plies,
     });
+    if (linkGame(scope, gameId, g.player_color)) linked += 1;
     for (const p of g.plies) {
       insertPositionIfMissing({
         game_id: gameId,
@@ -171,5 +167,5 @@ export async function importChessCom(
       progress: 0.35 + 0.65 * ((i + 1) / Math.max(1, games.length)),
     });
   }
-  return { username, count: games.length, gameIds };
+  return { username, count: games.length, gameIds, linked };
 }

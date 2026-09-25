@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import { writeProgressBundle } from "@/lib/okf-progress";
-import { activeProfileId } from "@/lib/active-profile";
+import { viewerOf } from "@/lib/library";
 
 export const dynamic = "force-dynamic";
 
-/** Regenerate the per-user OKF progress documents on demand. */
+/** Regenerate the OKF progress documents for the acting profile's accounts. */
 export async function POST(request: Request) {
   try {
-    const profileId = activeProfileId(request);
-    if (profileId == null) {
+    const viewer = viewerOf(request);
+    if (!viewer) {
       return NextResponse.json({ error: "No profile selected." }, { status: 404 });
     }
-    return NextResponse.json(writeProgressBundle(profileId));
+    const results = viewer.scopes.map((scope) => writeProgressBundle(scope));
+    return NextResponse.json({
+      written: results.flatMap((r) => r.written),
+      analyzedGames: results.reduce((sum, r) => sum + r.analyzedGames, 0),
+    });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

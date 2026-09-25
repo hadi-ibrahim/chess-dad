@@ -1,16 +1,39 @@
 import { NextResponse } from "next/server";
-import { enqueueImportJob, getJobStats } from "@/lib/queue";
-import { updateProfile, setProfileToken, getProfileById } from "@/lib/db";
-import { activeProfileId } from "@/lib/active-profile";
+import { accountScope, filterUnanalyzedWithMoves } from "@/lib/db";
+import { accountsOf, labelOf } from "@/lib/identity";
+import { viewerOf } from "@/lib/library";
+import { enqueueAnalyzeJobs, getJobStats } from "@/lib/queue";
 import { ensureWorkerStarted } from "@/lib/worker";
+import { importLichess } from "@/lib/importers/lichess";
+import { importChessCom } from "@/lib/importers/chesscom";
 import { config } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
+/** A throttled anonymous Lichess export can wait out a rate-limit window. */
+export const maxDuration = 300;
+
+interface AccountResult {
+  source: "lichess" | "chesscom";
+  username: string;
+  imported: number;
+  /** Games that needed the engine and were queued for it. */
+  analysisQueued: number;
+  /** Already stored, so only the library link was added. */
+  alreadyKnown: number;
+  error?: string;
+}
 
 /**
- * Publish import jobs. The fetch itself runs in the worker pool — Lichess can
- * throttle for a minute and Chess.com walks several archives, neither of which
- * should occupy an HTTP request.
+ * Fetch the acting profile's games and queue their analysis.
+ *
+ * The fetch happens **here**, in the request, not in the queue — because this is
+ * the only moment the caller's Lichess token exists. Keeping it request-scoped
+ * is what lets the token live in the browser and nowhere else: it is handed over,
+ * used for one `Authorization` header, and gone when the response is sent. The
+ * server keeps no session, no row, and no map.
+ *
+ * Analysis is still a background job: it is CPU-bound, needs no token, and is
+ * the part that would blow out a request.
  */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
@@ -21,68 +44,84 @@ export async function POST(request: Request) {
     analyzeAfter?: boolean;
   };
 
-  // Importing is only ever *for* a profile. Profiles are created on the Profiles
-  // tab, never here, so an import with nobody active is a clear error rather than
-  // a silent new profile.
-  const profileId = activeProfileId(request);
-  if (profileId == null) {
+  const viewer = viewerOf(request);
+  if (!viewer) {
     return NextResponse.json(
       { error: "No profile is active. Add one on the Profiles tab first." },
       { status: 409 }
     );
   }
 
-  const current = getProfileById(profileId);
   const explicitLichess = typeof body.lichess === "string" ? body.lichess.trim() : "";
   const explicitChesscom = typeof body.chesscom === "string" ? body.chesscom.trim() : "";
-  // The Games tab sends nothing: the acting profile already knows its accounts.
-  const lichess = explicitLichess || current?.lichess_username || "";
-  const chesscom = explicitChesscom || current?.chesscom_username || "";
+  // The Games tab sends no usernames: the acting profile already knows its accounts.
+  const accounts =
+    explicitLichess || explicitChesscom
+      ? [
+          ...(explicitLichess ? [{ source: "lichess" as const, username: explicitLichess }] : []),
+          ...(explicitChesscom ? [{ source: "chesscom" as const, username: explicitChesscom }] : []),
+        ]
+      : accountsOf(viewer.profile);
 
-  const suppliedToken = typeof body.lichessToken === "string" ? body.lichessToken.trim() : "";
-  if (suppliedToken) setProfileToken(profileId, suppliedToken);
-
-  const max = Math.min(
-    Math.max(typeof body.max === "number" ? Math.floor(body.max) : config.maxGamesPerSource, 1),
-    200
-  );
-
-  if (!lichess && !chesscom) {
+  if (accounts.length === 0) {
     return NextResponse.json(
       { error: "This profile has no Lichess or Chess.com username yet. Add one on the Profiles tab." },
       { status: 400 }
     );
   }
 
+  const max = Math.min(
+    Math.max(typeof body.max === "number" ? Math.floor(body.max) : config.maxGamesPerSource, 1),
+    200
+  );
   const analyzeAfter = body.analyzeAfter !== false;
-  const jobs: { source: string; username: string; jobId: number | null; skipped: boolean }[] = [];
+  // The browser's token, used for this call only. The deployment token is the
+  // operator's fallback for a headless install; neither is ever written down.
+  const token = (typeof body.lichessToken === "string" ? body.lichessToken.trim() : "") || config.lichessToken;
 
-  if (lichess) {
-    jobs.push({
-      source: "lichess",
-      username: lichess,
-      ...enqueueImportJob("lichess", lichess, max, profileId, { analyzeAfter }),
-    });
-  }
-  if (chesscom) {
-    jobs.push({
-      source: "chesscom",
-      username: chesscom,
-      ...enqueueImportJob("chesscom", chesscom, max, profileId, { analyzeAfter }),
-    });
-  }
+  const results = await Promise.all(
+    accounts.map(async (account): Promise<AccountResult> => {
+      const scope = accountScope(account.source, account.username);
+      const base = { source: account.source, username: account.username };
+      try {
+        const fetched =
+          account.source === "lichess"
+            ? await importLichess(account.username, max, scope, token || undefined)
+            : await importChessCom(account.username, max, scope);
 
-  // Explicit usernames still update the profile; the Games tab sends none.
-  if (explicitLichess || explicitChesscom) {
-    updateProfile(profileId, { lichess_username: lichess, chesscom_username: chesscom });
-  }
+        // Chain straight into analysis so an import is one action, not two.
+        const pending = analyzeAfter ? filterUnanalyzedWithMoves(fetched.gameIds) : [];
+        const { enqueued } = pending.length ? enqueueAnalyzeJobs(pending, {}) : { enqueued: 0 };
+
+        return {
+          ...base,
+          imported: fetched.count,
+          analysisQueued: enqueued,
+          alreadyKnown: fetched.count - fetched.linked,
+        };
+      } catch (e) {
+        return { ...base, imported: 0, analysisQueued: 0, alreadyKnown: 0, error: (e as Error).message };
+      }
+    })
+  );
+
+  const failed = results.filter((r) => r.error);
+  const imported = results.reduce((sum, r) => sum + r.imported, 0);
+  const analysisQueued = results.reduce((sum, r) => sum + r.analysisQueued, 0);
+
   ensureWorkerStarted();
 
-  return NextResponse.json({
-    queued: jobs.filter((j) => !j.skipped).length,
-    analyzeAfter,
-    profileId,
-    importJobs: jobs,
-    ...getJobStats(),
-  });
+  const payload = {
+    profile: labelOf(viewer.profile),
+    accounts: results,
+    imported,
+    analysisQueued,
+    ...getJobStats(viewer.scopes),
+  };
+
+  // Everything failed: report it as a failure, with the reason the account gave.
+  if (failed.length === results.length) {
+    return NextResponse.json({ ...payload, error: failed[0].error }, { status: 502 });
+  }
+  return NextResponse.json(payload);
 }

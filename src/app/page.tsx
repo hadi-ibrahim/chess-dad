@@ -59,7 +59,7 @@ export default function Home() {
   const [pending, setPending] = useState(0);
   const [queuedIds, setQueuedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [activeProfile, setActiveProfile] = useState<{ id: number; display_name: string; lichess_username: string; chesscom_username: string } | null>(null);
+  const [activeProfile, setActiveProfile] = useState<{ id: string; display_name: string; lichess_username: string; chesscom_username: string } | null>(null);
 
   // Filters
   const [q, setQ] = useState("");

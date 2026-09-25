@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import { computeWeaknesses } from "./weaknesses";
-import { getProfileById } from "./db";
 
 /**
  * Emit the player's aggregate progress back into the OKF bundle as a per-user
@@ -42,11 +41,17 @@ export interface ProgressBundleResult {
   analyzedGames: number;
 }
 
-/** Regenerate the per-user progress documents. Safe to call repeatedly. */
-export function writeProgressBundle(profileId: number): ProgressBundleResult {
-  const profile = getProfileById(profileId);
-  const username = profile?.lichess_username || profile?.chesscom_username || "player";
-  const w = computeWeaknesses("all", profileId);
+/**
+ * Regenerate one account's progress documents. Safe to call repeatedly.
+ *
+ * Progress is written per **account** (`lichess:rooronoa`), not per profile: a
+ * profile is a browser-local preference, and a document about a person should
+ * not be filed under a browser.
+ */
+export function writeProgressBundle(scope: string): ProgressBundleResult {
+  const [, account = ""] = scope.split(":");
+  const username = account || "player";
+  const w = computeWeaknesses("all", [scope]);
 
   if (w.analyzedGames === 0) {
     return { written: [], analyzedGames: 0 };

@@ -48,6 +48,17 @@ The `moves` field is space-separated and may arrive as **either** spelling:
 Lichess has served SAN for this field, so the importer tries UCI first and falls
 back to SAN. Assuming UCI alone silently produced games with zero moves.
 
+# Where an import runs
+
+Inside the import request, not on the queue. That is a consequence of the token
+rule below: the token is held by the browser and handed over per call, so the
+only moment it exists for the server is while that request is open. Analysis —
+which needs no token and is CPU-bound — is still a [queued job](job-queue.md).
+
+The trade is that a throttled **anonymous** import can make the request wait out
+a rate-limit window. Supplying a token, which raises the limits severalfold, is
+what keeps imports quick; the request carries a generous timeout for the rest.
+
 # Rate limits and tokens
 
 Anonymous game exports are throttled to a few requests per minute, and the
@@ -57,9 +68,12 @@ The importer therefore:
 * retries after a wait on both `429` (honouring `Retry-After`) and a masked `404`;
 * tells "user not found" apart from throttling by checking the profile endpoint;
 * rejects a bad token immediately on `401`/`403`, pointing at the token page;
-* accepts a personal API token — stored per profile or from `LICHESS_TOKEN` — whose
-  authenticated limits are several times higher. A supplied token is stored in
-  the `settings` table, so it survives restarts without an env change.
+* accepts a personal API token — **held in the browser, saved with the profile,
+  and posted with the import call** — whose authenticated limits are several
+  times higher. The server uses it for that one request and keeps nothing: no
+  session, no row, no map. A supplied token therefore survives restarts and
+  redeploys, because the browser is the one holding it. `LICHESS_TOKEN` remains as
+  a deployment-wide fallback for a headless install.
 
 # Chess.com
 
@@ -71,9 +85,12 @@ with chess.js, and `[%clk …]` annotations become clock times.
 
 # Idempotence and repair
 
-Games are keyed by `(source, external_id)`. Re-importing refreshes game metadata
-and fills any missing positions *without* overwriting existing analysis, so a
-re-import repairs games that were previously stored without moves.
+Games are keyed by `(source, external_id)` — globally, not per person. Re-importing
+refreshes game metadata and fills any missing positions *without* overwriting
+existing analysis, so a re-import repairs games that were previously stored
+without moves. It also links the game into the importing account's library; if
+someone else already imported and analysed it, that is all a re-import does, and
+the analysis is reused rather than recomputed.
 
 [^lichess-export]: The Lichess export endpoint and its query parameters.
 [^chesscom-api]: The Chess.com published-data API, including the required `User-Agent`.

@@ -13,7 +13,7 @@ export default function Nav() {
     { href: "/insights", label: "Insights" },
     { href: "/puzzles", label: "Puzzles" },
     { href: "/openings", label: "Openings" },
-    { href: "/knowledge", label: "Knowledge" },
+    { href: "/lessons", label: "Learn" },
   ];
 
   return (

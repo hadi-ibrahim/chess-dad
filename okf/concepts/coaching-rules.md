@@ -5,7 +5,7 @@ description: How Chess Dad turns engine analysis into tier-appropriate, plain-la
 tags: [coaching, engine, llm, explanation]
 status: stable
 generated: { by: chessdad/1.0, at: 2026-09-22 }
-updated: { by: "process:okf-code-sync", at: 2026-09-23 }
+updated: { by: "process:ai-providers", at: 2026-09-25 }
 sources:
   - id: engine-first
     resource: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
@@ -36,12 +36,13 @@ Every coaching explanation has three parts:
 
 # Deterministic fallback
 
-When no LLM is configured (or an LLM call fails), the app generates an
-explanation from these rules using the engine data and the motif tag. The
-sections below are the fallback lessons the app reads back for blunder, mistake,
-miss, inaccuracy, and good; the `explanation` itself is assembled from the
-verdict verb, the engine's preferred move, the evaluation change, the direction of
-the game, and the motif phrase.
+The app always generates this explanation from the rules below, using the engine
+data and the motif tag — it is the default, not a degradation. No AI provider is
+involved, no key is needed, and it cannot fail. The sections below are the
+fallback lessons the app reads back for blunder, mistake, miss, inaccuracy, and
+good; the `explanation` itself is assembled from the verdict verb, the engine's
+preferred move, the evaluation change, the direction of the game, and the motif
+phrase.
 
 Two rules keep that assembly readable:
 
@@ -59,10 +60,22 @@ Motif tags are detector keys, so each is mapped to a noun phrase (`tactical` →
 tactical opportunity", `hung-piece` → "a hung piece") and to an article-free topic
 for drill text ("Solve 10 hung piece puzzles").
 
-The template is cached per FEN in `llm_cache`, so changing it only affects
-positions analysed afterwards. Rebuilding existing text means clearing those cache
-rows and re-analysing the affected games; the engine evaluations come from
-`engine_cache`, so the re-run costs no Stockfish time.
+The template is computed fresh on every analysis — it is pure and offline, so
+there is nothing to cache. Changing it therefore affects any game re-analysed
+afterwards; the engine evaluations come from `engine_cache`, so a re-run costs no
+Stockfish time.
+
+# AI readings
+
+An AI provider can add a second reading of a position, on the user's request. It
+is stored separately in `ai_explanations` and never overwrites the deterministic
+text above. The prompt is the same engine data (FEN, played move, engine best
+move, evaluations, classification, motif, opening, and the mover's rating), with
+the same accuracy rules. What differs is the transport: the provider, model and
+API key come from the user's browser profile rather than the environment, and the
+key is used only for the request that carries it. See
+[AI providers](ai-providers.md) for the provider list, the cache key, and the
+failure modes. The illegal-move guard below applies to both.
 
 ## Move classification: blunder
 

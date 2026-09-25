@@ -10,11 +10,18 @@ import {
   type JobType,
 } from "@/lib/queue";
 import { getDb } from "@/lib/db";
+import { viewerOf } from "@/lib/library";
 import { ensureWorkerStarted } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
-/** Publish analysis jobs for specific games, or for every game still pending. */
+/**
+ * Publish analysis jobs for specific games, or for every game in the acting
+ * profile's library that is still pending.
+ *
+ * Analysis is a property of the game, not of a profile, so two accounts that both
+ * hold the same game share the one job.
+ */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     gameIds?: number[];
@@ -24,18 +31,31 @@ export async function POST(request: Request) {
     generatePuzzles?: boolean;
   };
 
+  const viewer = viewerOf(request);
+
   let gameIds: number[] = [];
   if (body.all) {
+    if (!viewer) return NextResponse.json({ error: "No profile is active." }, { status: 409 });
+    const placeholders = viewer.scopes.map(() => "?").join(",");
     const rows = getDb()
-      .prepare("SELECT id FROM games WHERE analyzed = 0 AND total_plies > 0 ORDER BY played_at ASC, id ASC")
-      .all() as { id: number }[];
+      .prepare(
+        `SELECT DISTINCT id FROM library_games
+         WHERE analyzed = 0 AND total_plies > 0 AND scope IN (${placeholders})
+         ORDER BY played_at ASC, id ASC`
+      )
+      .all(...viewer.scopes) as { id: number }[];
     gameIds = rows.map((r) => Number(r.id));
   } else if (Array.isArray(body.gameIds)) {
     gameIds = body.gameIds.map((n) => Number(n)).filter((n) => Number.isInteger(n));
   }
 
   if (gameIds.length === 0) {
-    return NextResponse.json({ enqueued: 0, skipped: 0, ...getJobStats(), message: "Nothing to analyze." });
+    return NextResponse.json({
+      enqueued: 0,
+      skipped: 0,
+      ...getJobStats(viewer?.scopes ?? null),
+      message: "Nothing to analyze.",
+    });
   }
 
   const depth =
@@ -48,7 +68,11 @@ export async function POST(request: Request) {
 
   ensureWorkerStarted();
 
-  return NextResponse.json({ ...result, requested: gameIds.length, ...getJobStats() });
+  return NextResponse.json({
+    ...result,
+    requested: gameIds.length,
+    ...getJobStats(viewer?.scopes ?? null),
+  });
 }
 
 export async function GET(request: Request) {
@@ -60,6 +84,7 @@ export async function GET(request: Request) {
 
   ensureWorkerStarted();
 
+  const viewer = viewerOf(request);
   return NextResponse.json({
     jobList: listJobs({
       status: (status as JobStatus | null) ?? undefined,
@@ -67,7 +92,7 @@ export async function GET(request: Request) {
       gameId: gameId ? Number(gameId) : undefined,
       limit,
     }),
-    ...getJobStats(),
+    ...getJobStats(viewer?.scopes ?? null),
   });
 }
 
@@ -82,5 +107,6 @@ export async function DELETE(request: Request) {
   else if (action === "retry") changed = retryFailedJobs();
   else return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
 
-  return NextResponse.json({ action, changed, ...getJobStats() });
+  const viewer = viewerOf(request);
+  return NextResponse.json({ action, changed, ...getJobStats(viewer?.scopes ?? null) });
 }

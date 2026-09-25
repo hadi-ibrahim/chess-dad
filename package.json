@@ -6,7 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --conditions=react-server --disable-warning=ExperimentalWarning --import ./test/setup.mjs --test 'test/*.test.ts'",
+    "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "verify:lessons": "node scripts/verify-lessons.mjs",
+    "setup:engine": "node scripts/setup-engine.mjs",
+    "verify:engine": "node scripts/setup-engine.mjs --check",
+    "backup": "node scripts/backup-db.mjs",
+    "estimate:llm": "node scripts/estimate-llm-cost.mjs",
+    "check": "npm run lint && npm run typecheck && npm run typecheck:test && npm run test && npm run verify:lessons"
   },
   "dependencies": {
     "chess.js": "^1.4.0",

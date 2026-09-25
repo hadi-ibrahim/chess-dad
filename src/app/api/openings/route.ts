@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { getOpeningEntries, findOpening, detectDeviation } from "@/lib/openings";
-import { activeProfileId } from "@/lib/active-profile";
+import { viewerOf } from "@/lib/library";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const profileId = activeProfileId(request);
-  return NextResponse.json({ openings: profileId == null ? [] : getOpeningEntries(profileId) });
+  // The repertoire is theory, not history: it is worth serving even with nobody
+  // set up, just without any of the player's own records or review schedule.
+  const viewer = viewerOf(request);
+  return NextResponse.json({ openings: getOpeningEntries(viewer?.scopes ?? []) });
 }
 
 export async function POST(request: Request) {

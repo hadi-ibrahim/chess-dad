@@ -20,14 +20,17 @@ sources:
 
 # Overview
 
-Personal puzzles are the player's own missed positions. Spaced repetition
-re-serves each puzzle just before it would be forgotten, so training time goes
-to the patterns that are still weak.[^sm2]
+Puzzles are positions where someone went wrong and the engine knows what they
+should have played. The **drill is shared** — it was derived once, when the game
+was analysed — but the **schedule is the player's own**: `puzzle_reviews` is
+keyed by account, so a drill follows a person between browsers while two players
+who reach the same position never share a review history.[^sm2]
 
-A puzzle is created from one of the player's own moves classified `blunder`,
-`mistake`, or `miss` that has an engine best move, and only when no puzzle
-already exists for that FEN — so the same position is never duplicated, even
-across games.
+A drill is created for **either side's** move classified `blunder`, `mistake`, or
+`miss` that has an engine best move, tagged with the `color` whose move it was,
+and only when no drill already exists for that FEN and colour — so the same
+position is never duplicated, even across games. Whoever sat on that side is the
+one served it.
 
 # Schedule (simplified SM-2)
 
@@ -38,11 +41,11 @@ across games.
 | Later success | `max(1, round(interval * ease))` | +0.1 (max 2.5) |
 | Failure | reset to 1 day | −0.2 (min 1.3) |
 
-Each puzzle stores its `ease` factor (starting at 2.5), current
-`interval_days`, repetition count, and `due_at` timestamp; a failure resets the
-repetition count, and `due_at` is the current time plus the new interval. The
-puzzles view shows each card's solved/failed counts alongside its repetitions,
-interval, and ease state.
+Each account's row for a puzzle stores its `ease` factor (starting at 2.5),
+current `interval_days`, repetition count, and `due_at` timestamp; a failure
+resets the repetition count, and `due_at` is the current time plus the new
+interval. A drill with no row yet is simply due. The puzzles view shows each
+card's solved/failed counts alongside its repetitions, interval, and ease state.
 
 # What counts as a success
 

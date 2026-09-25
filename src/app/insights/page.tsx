@@ -121,6 +121,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function Insights() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [needsProfile, setNeedsProfile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [showAllOpenings, setShowAllOpenings] = useState(false);
@@ -135,13 +136,21 @@ export default function Insights() {
     setError(null);
     fetch(`/api/insights?window=${profileWindow}`)
       .then(async (r) => {
+        // 409 is the API saying there is nobody to profile, not a failure: a
+        // browser with no profile set up has nothing to show yet.
+        if (r.status === 409) {
+          if (!cancelled) setNeedsProfile(true);
+          return null;
+        }
         if (!r.ok) throw new Error(`Insights request failed (${r.status})`);
         const body = (await r.json()) as Profile;
         if (!body || !Array.isArray(body.accuracyTrend)) throw new Error("Insights response was malformed");
         return body;
       })
       .then((body) => {
-        if (!cancelled) setProfile(body);
+        if (cancelled || body === null) return;
+        setNeedsProfile(false);
+        setProfile(body);
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);
@@ -226,6 +235,29 @@ export default function Insights() {
       )
       .slice(0, BRILLIANT_SHOWN);
   }, [profile, brilliantScope]);
+
+  // Nobody is set up in this browser yet, so there is no profile to report on.
+  // This is the same first-run state the Games tab shows, not an error.
+  if (needsProfile) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">Insights</h1>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
+          <p className="text-zinc-200">No profile is active.</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-zinc-400">
+            Insights are built from your own games, so add a profile first. Games already
+            analysed for that account appear straight away.
+          </p>
+          <Link
+            href="/profiles"
+            className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+          >
+            Go to Profiles
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (

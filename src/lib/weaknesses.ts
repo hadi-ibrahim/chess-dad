@@ -185,11 +185,17 @@ export const PROFILE_WINDOWS: ProfileWindow[] = ["30", "100", "month", "all"];
  * Aggregate the weakness profile, optionally scoped to recent form: the last 30
  * or 100 analysed games, or the last 30 days. All-time was the only view before,
  * which cannot answer "am I improving?".
+ *
+ * `scopes` are the acting profile's library keys (`lichess:rooronoa`). Every
+ * predicate reads through `library_games`, so the numbers are always one
+ * person's — the games themselves are shared.
  */
-export function computeWeaknesses(window: ProfileWindow, profileId: number): WeaknessProfile {
+export function computeWeaknesses(window: ProfileWindow, scopes: string[]): WeaknessProfile {
   const db = getDb();
+  if (scopes.length === 0) return emptyProfile(0, 0);
+  const scopeSql = `scope IN (${scopes.map(() => "?").join(",")})`;
   const totalGames = (
-    db.prepare("SELECT COUNT(*) n FROM games WHERE profile_id = ?").get(profileId) as { n: number }
+    db.prepare(`SELECT COUNT(*) n FROM library_games WHERE ${scopeSql}`).get(...scopes) as { n: number }
   ).n;
 
   let scopeIds: number[] | null = null;
@@ -198,34 +204,35 @@ export function computeWeaknesses(window: ProfileWindow, profileId: number): Wea
     scopeIds = (
       db
         .prepare(
-          "SELECT id FROM games WHERE analyzed = 1 AND profile_id = ? ORDER BY played_at DESC, id DESC LIMIT ?"
+          `SELECT id FROM library_games WHERE analyzed = 1 AND ${scopeSql}
+           ORDER BY played_at DESC, id DESC LIMIT ?`
         )
-        .all(profileId, limit) as { id: number }[]
+        .all(...scopes, limit) as { id: number }[]
     ).map((r) => Number(r.id));
   } else if (window === "month") {
     scopeIds = (
       db
         .prepare(
-          `SELECT id FROM games WHERE analyzed = 1 AND profile_id = ?
+          `SELECT id FROM library_games WHERE analyzed = 1 AND ${scopeSql}
              AND played_at >= datetime('now', '-30 days')`
         )
-        .all(profileId) as { id: number }[]
+        .all(...scopes) as { id: number }[]
     ).map((r) => Number(r.id));
   }
 
   const analyzedGames = scopeIds
     ? scopeIds.length
     : (db
-        .prepare("SELECT COUNT(*) n FROM games WHERE analyzed = 1 AND profile_id = ?")
-        .get(profileId) as { n: number }).n;
+        .prepare(`SELECT COUNT(*) n FROM library_games WHERE analyzed = 1 AND ${scopeSql}`)
+        .get(...scopes) as { n: number }).n;
   const profile = emptyProfile(Number(totalGames), Number(analyzedGames));
 
   const scopeClause = scopeIds ? ` AND id IN (${scopeIds.map(() => "?").join(",")})` : "";
   const games = db
     .prepare(
-      `SELECT * FROM games WHERE analyzed = 1 AND profile_id = ?${scopeClause} ORDER BY played_at ASC`
+      `SELECT * FROM library_games WHERE analyzed = 1 AND ${scopeSql}${scopeClause} ORDER BY played_at ASC`
     )
-    .all(profileId, ...(scopeIds ?? [])) as Record<string, unknown>[];
+    .all(...scopes, ...(scopeIds ?? [])) as Record<string, unknown>[];
 
   // Color performance + accuracy trend (per game).
   for (const g of games) {
@@ -254,12 +261,12 @@ export function computeWeaknesses(window: ProfileWindow, profileId: number): Wea
       `SELECT p.ply, p.color, p.classification, p.motif, p.phase, p.centipawn_loss,
               p.clock_seconds, g.player_color, g.eco, g.opening_name, g.result,
               g.accuracy, g.played_at, g.id AS game_id
-       FROM positions p JOIN games g ON g.id = p.game_id
-       WHERE g.analyzed = 1 AND g.profile_id = ? AND p.color = g.player_color${
+       FROM positions p JOIN library_games g ON g.id = p.game_id
+       WHERE g.analyzed = 1 AND g.${scopeSql} AND p.color = g.player_color${
          scopeIds ? ` AND p.game_id IN (${scopeIds.map(() => "?").join(",")})` : ""
        }`
     )
-    .all(profileId, ...(scopeIds ?? [])) as unknown as Row[];
+    .all(...scopes, ...(scopeIds ?? [])) as unknown as Row[];
 
   const motifCounts = new Map<string, number>();
   const phaseAgg = new Map<
@@ -416,14 +423,14 @@ export function computeWeaknesses(window: ProfileWindow, profileId: number): Wea
     .prepare(
       `SELECT p.game_id, p.ply, p.san, p.color, p.phase, p.motif,
               g.player_color, g.white, g.black, g.opponent, g.result, g.played_at
-       FROM positions p JOIN games g ON g.id = p.game_id
-       WHERE p.classification = 'brilliant' AND g.analyzed = 1 AND g.profile_id = ?${
+       FROM positions p JOIN library_games g ON g.id = p.game_id
+       WHERE p.classification = 'brilliant' AND g.analyzed = 1 AND g.${scopeSql}${
          scopeIds ? ` AND g.id IN (${scopeIds.map(() => "?").join(",")})` : ""
        }
        ORDER BY g.played_at DESC, p.game_id DESC, p.ply ASC
        LIMIT ?`
     )
-    .all(profileId, ...(scopeIds ?? []), BRILLIANT_SCAN) as unknown as BrilliantRow[];
+    .all(...scopes, ...(scopeIds ?? []), BRILLIANT_SCAN) as unknown as BrilliantRow[];
 
   const toBrilliantMove = (r: BrilliantRow): BrilliantMove => {
     const color: "w" | "b" = r.player_color === "b" ? "b" : "w";
@@ -461,12 +468,12 @@ export function computeWeaknesses(window: ProfileWindow, profileId: number): Wea
     .prepare(
       `SELECT SUM(p.color = g.player_color) AS mine,
               SUM(p.color <> g.player_color) AS theirs
-       FROM positions p JOIN games g ON g.id = p.game_id
-       WHERE p.classification = 'brilliant' AND g.analyzed = 1 AND g.profile_id = ?${
+       FROM positions p JOIN library_games g ON g.id = p.game_id
+       WHERE p.classification = 'brilliant' AND g.analyzed = 1 AND g.${scopeSql}${
          scopeIds ? ` AND g.id IN (${scopeIds.map(() => "?").join(",")})` : ""
        }`
     )
-    .get(profileId, ...(scopeIds ?? [])) as { mine: number | null; theirs: number | null };
+    .get(...scopes, ...(scopeIds ?? [])) as { mine: number | null; theirs: number | null };
 
   profile.recentBrilliant = {
     mine,

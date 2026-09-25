@@ -20,7 +20,7 @@ import {
   isCheckmate,
   isDraw,
 } from "./chess-core";
-import { explainPosition } from "./llm";
+import { fallbackExplain } from "./llm";
 import type { EngineEval, MoveClass, Color } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,8 @@ export interface AnalyzeOptions {
 
 export interface AnalyzeResult {
   gameId: number;
-  accuracy: number | null;
+  /** Per side, because both players may open the review. */
+  accuracy: { white: number | null; black: number | null };
   criticalCount: number;
   puzzleCount: number;
 }
@@ -205,8 +206,13 @@ async function analyzeGameWithEngine(
     });
   }
 
-  let accuracySum = 0;
-  let accuracyCount = 0;
+  // Accuracy belongs to a move, so it is accumulated per side. The game is not
+  // owned by one player any more: whoever has the white seat reads the white
+  // number.
+  const accuracy: Record<Color, { sum: number; count: number }> = {
+    w: { sum: 0, count: 0 },
+    b: { sum: 0, count: 0 },
+  };
   let criticalCount = 0;
   let puzzleCount = 0;
 
@@ -250,18 +256,25 @@ async function analyzeGameWithEngine(
     });
 
     const phase = detectPhase(p.fen, i);
-    const isCritical = cpLoss > 100 || classification === "miss" ? 1 : 0;
+    // Forced and book moves are never worth coaching, however big the swing: the
+    // player had one legal move, or played known theory. Without this exclusion a
+    // forced move whose only reply still loses material was flagged critical and
+    // "explained", which produced self-contradictory text ("the engine preferred
+    // Kh8 instead of Kh8") for a move nobody could have got wrong.
+    const coachable = classification !== "forced" && classification !== "book";
+    const isCritical = coachable && (cpLoss > 100 || classification === "miss") ? 1 : 0;
     if (isCritical) criticalCount += 1;
 
     const bestSan = uciToSan(p.fen, bestUci) ?? (bestUci || null);
 
-    // Game accuracy is measured over the player's own moves.
-    if (p.color === game.player_color) {
+    // Accuracy is measured over each side's own moves.
+    {
+      const bucket = accuracy[p.color];
       const acc = deliveredMate
         ? 100
         : moveAccuracy(winProb(evalBeforeCp), winProb(evalAfterCp));
-      accuracySum += acc;
-      accuracyCount += 1;
+      bucket.sum += acc;
+      bucket.count += 1;
     }
 
     upsertPosition({
@@ -289,17 +302,20 @@ async function analyzeGameWithEngine(
       drill_suggestion: p.drill_suggestion,
     });
 
-    // Build personal puzzles from the player's own serious mistakes.
+    // Build puzzles from serious mistakes on either side. A puzzle is worth
+    // deriving when the engine knows the move that should have been played, and
+    // whoever sat on that side is the one who gets served it — so analysing a
+    // game once prepares drills for both players, not just the importer.
     if (
       generatePuzzles &&
-      p.color === game.player_color &&
       (classification === "blunder" || classification === "mistake" || classification === "miss") &&
       bestUci &&
-      !puzzleExists(p.fen, game.profile_id)
+      !puzzleExists(p.fen, p.color)
     ) {
       insertPuzzle({
         game_id: gameId,
         position_id: p.id,
+        color: p.color,
         fen: p.fen,
         solution_uci: bestUci,
         solution_san: bestSan ?? "",
@@ -309,8 +325,10 @@ async function analyzeGameWithEngine(
     }
   }
 
-  const accuracy = accuracyCount > 0 ? accuracySum / accuracyCount : null;
-  markGameAnalyzed(gameId, accuracy ?? -1);
+  const sideAccuracy = (color: Color): number | null =>
+    accuracy[color].count > 0 ? accuracy[color].sum / accuracy[color].count : null;
+  const resultAccuracy = { white: sideAccuracy("w"), black: sideAccuracy("b") };
+  markGameAnalyzed(gameId, resultAccuracy);
 
   opts.onProgress?.({
     stage: explain ? "explain" : "done",
@@ -319,12 +337,19 @@ async function analyzeGameWithEngine(
     progress: explain ? 0.9 : 1,
   });
 
-  // Generate coaching explanations for the player's critical moments.
+  // Explain the critical moments of both sides. A game has two players and each
+  // of them may open it, so coaching the importer's moves only would leave half
+  // the review screen mute.
+  //
+  // This is always the deterministic engine coach: it is free, offline and never
+  // fails. AI coaching is a separate, user-initiated action against a provider
+  // they configured (see `POST /api/games/[id]/ai`), so it can never be billed to
+  // the operator and never blocks an analysis job.
   if (explain) {
     const fresh = getPositions(gameId);
     for (const pos of fresh) {
-      if (pos.is_critical && pos.color === game.player_color && pos.best_move) {
-        const ex = await explainPosition({
+      if (pos.is_critical && pos.best_move) {
+        const ex = fallbackExplain({
           fen: pos.fen,
           playedSan: pos.san ?? "",
           bestSan: pos.best_move_san ?? pos.best_move ?? "",
@@ -333,7 +358,9 @@ async function analyzeGameWithEngine(
           classification: pos.classification ?? "inaccuracy",
           motif: pos.motif,
           openingName: game.opening_name,
-          rating: game.player_rating ?? 1200,
+          // The mover's own rating: the same position is a different lesson for
+          // a 900 and a 2100.
+          rating: (pos.color === "w" ? game.white_rating : game.black_rating) ?? 1200,
         });
         upsertPosition({
           game_id: gameId,
@@ -364,7 +391,7 @@ async function analyzeGameWithEngine(
   }
 
   opts.onProgress?.({ stage: "done", done: positions.length, total: positions.length, progress: 1 });
-  return { gameId, accuracy, criticalCount, puzzleCount };
+  return { gameId, accuracy: resultAccuracy, criticalCount, puzzleCount };
 }
 
 export type { Color };

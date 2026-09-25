@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { findOpening } from "@/lib/openings";
 import { listOpeningReviews, updateOpeningReview } from "@/lib/db";
-import { activeProfileId } from "@/lib/active-profile";
+import { viewerOf } from "@/lib/library";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
  * Record one practice attempt at an opening line and reschedule it on the same
  * simplified SM-2 curve the puzzles use: a clean run moves the interval out, a
  * miss resets it to a day and drops the ease.
+ *
+ * The schedule is filed under the profile's primary account, so it follows the
+ * account between browsers rather than living in one browser.
  */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { eco?: string; clean?: boolean };
@@ -16,12 +19,13 @@ export async function POST(request: Request) {
   if (!eco || !findOpening(eco)) {
     return NextResponse.json({ error: "Unknown ECO" }, { status: 404 });
   }
-  const profileId = activeProfileId(request);
-  if (profileId == null) {
+  const viewer = viewerOf(request);
+  const scope = viewer?.scopes[0];
+  if (!viewer || !scope) {
     return NextResponse.json({ error: "No profile selected." }, { status: 404 });
   }
   const clean = Boolean(body.clean);
-  const current = listOpeningReviews(profileId).find((r) => r.eco === eco) ?? null;
+  const current = listOpeningReviews(viewer.scopes).find((r) => r.eco === eco) ?? null;
   const ease0 = current?.ease ?? 2.5;
   const interval0 = current?.interval_days ?? 0;
   const reps0 = current?.repetitions ?? 0;
@@ -40,6 +44,6 @@ export async function POST(request: Request) {
     intervalDays = 1;
   }
   const dueAt = new Date(Date.now() + intervalDays * 86_400_000).toISOString();
-  updateOpeningReview(profileId, eco, ease, intervalDays, repetitions, dueAt, clean);
+  updateOpeningReview(scope, eco, ease, intervalDays, repetitions, dueAt, clean);
   return NextResponse.json({ eco, clean, ease, intervalDays, repetitions, dueAt });
 }

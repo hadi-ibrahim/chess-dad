@@ -1,6 +1,7 @@
 import "server-only";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { config } from "./config";
+import { log } from "./log";
 import type { EngineEval } from "./types";
 
 /** Centipawn value used to encode mate scores so they sort above any cp. */
@@ -43,6 +44,8 @@ class StockfishEngine {
   private waiter: Waiter | null = null;
   private lastBest: EngineEval | null = null;
   private chain: Promise<unknown> = Promise.resolve();
+  /** The tail of the engine's stderr, kept so an exit can be explained. */
+  private stderr = "";
 
   private start(): Promise<void> {
     if (this.ready) return this.ready;
@@ -51,12 +54,29 @@ class StockfishEngine {
       const proc = spawn(config.stockfishPath, [], { stdio: ["pipe", "pipe", "pipe"] });
       this.proc = proc;
       proc.stdout.on("data", (d: Buffer) => this.onData(d.toString()));
-      proc.stderr.on("data", () => {});
+      // The engine's stderr was previously discarded outright. Keep the tail: when
+      // Stockfish exits or refuses to start, that text is the only explanation.
+      this.stderr = "";
+      proc.stderr.on("data", (d: Buffer) => {
+        this.stderr = (this.stderr + d.toString()).slice(-2000);
+      });
       proc.on("error", (e) => {
+        // A failed spawn emits `error` and never `exit`, so the process has to be
+        // cleared here too — otherwise this dead engine is returned to the pool and
+        // reused, and every later analysis waits out the full timeout.
+        this.proc = null;
+        this.ready = null;
+        this.readyResolve = null;
+        log.error("engine: could not start Stockfish", { stockfishPath: config.stockfishPath, err: e });
         this.failCurrent(new Error(`Stockfish failed to start: ${e.message}`));
         reject(e);
       });
       proc.on("exit", (code) => {
+        if (this.stderr.trim()) {
+          log.warn("engine: Stockfish exited", { code, stderr: this.stderr.trim().slice(-500) });
+        } else {
+          log.warn("engine: Stockfish exited", { code });
+        }
         this.failCurrent(new Error(`Stockfish exited (code ${code})`));
         this.proc = null;
         this.ready = null;
@@ -153,6 +173,27 @@ class StockfishEngine {
     );
     return result;
   }
+
+  /**
+   * Kill the engine and forget it. Used by the pool's reaper: a Stockfish process
+   * holds `ENGINE_HASH_MB` of heap for as long as it lives, which on a small
+   * container is worth reclaiming once nothing is being analysed.
+   */
+  dispose(): void {
+    const proc = this.proc;
+    this.proc = null;
+    this.ready = null;
+    this.readyResolve = null;
+    this.buffer = "";
+    this.stderr = "";
+    this.failCurrent(new Error("engine disposed"));
+    if (!proc) return;
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 let engine: StockfishEngine | null = null;
@@ -173,8 +214,18 @@ class EnginePool {
   private all: StockfishEngine[] = [];
   private idle: StockfishEngine[] = [];
   private waiters: ((e: StockfishEngine) => void)[] = [];
+  // Declared and assigned explicitly rather than as a constructor parameter
+  // property: that syntax needs a real TypeScript transform, so it cannot be
+  // loaded by `node --test` in strip-only mode, which is how this module is
+  // unit-tested.
+  private readonly size: number;
+  /** When each idle engine was returned to the pool, for the reaper. */
+  private idleSince = new WeakMap<StockfishEngine, number>();
+  private reaper: NodeJS.Timeout | null = null;
 
-  constructor(private readonly size: number) {}
+  constructor(size: number) {
+    this.size = size;
+  }
 
   acquire(): Promise<StockfishEngine> {
     const free = this.idle.pop();
@@ -184,13 +235,46 @@ class EnginePool {
       this.all.push(created);
       return Promise.resolve(created);
     }
+    // Every engine is busy; wait for one to come back.
     return new Promise((resolve) => this.waiters.push(resolve));
   }
 
   release(engine: StockfishEngine): void {
     const waiting = this.waiters.shift();
-    if (waiting) waiting(engine);
-    else this.idle.push(engine);
+    if (waiting) {
+      waiting(engine);
+      return;
+    }
+    this.idle.push(engine);
+    this.idleSince.set(engine, Date.now());
+    this.startReaper();
+  }
+
+  /**
+   * Kill engines that have been idle for a while.
+   *
+   * Each Stockfish process holds `ENGINE_HASH_MB` of heap for as long as it
+   * lives, so an idle deployment would otherwise sit on a few hundred megabytes
+   * of hash table for nothing. One engine is kept warm for the next game.
+   */
+  private startReaper(): void {
+    if (this.reaper) return;
+    const idleMs = config.engineIdleMs;
+    if (!(idleMs > 0)) return;
+    this.reaper = setInterval(() => this.sweep(idleMs), Math.min(60_000, Math.max(1_000, idleMs)));
+    this.reaper.unref?.();
+  }
+
+  private sweep(idleMs: number): void {
+    const cutoff = Date.now() - idleMs;
+    while (this.idle.length > 1) {
+      const oldest = this.idle[0];
+      if ((this.idleSince.get(oldest) ?? 0) > cutoff) break;
+      this.idle.shift();
+      this.all = this.all.filter((e) => e !== oldest);
+      oldest.dispose();
+      log.info("engine: reaped an idle engine", { idleMs, remaining: this.all.length });
+    }
   }
 }
 

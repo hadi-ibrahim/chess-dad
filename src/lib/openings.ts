@@ -69,7 +69,10 @@ export interface OpeningEntry extends Opening {
 }
 
 /** The theory set joined with the player's results and review schedule. */
-export function getOpeningEntries(profileId: number): OpeningEntry[] {
+export function getOpeningEntries(scopes: string[]): OpeningEntry[] {
+  if (scopes.length === 0) {
+    return OPENINGS.map((o) => ({ ...o, record: null, review: null, due: false }));
+  }
   const db = getDb();
   const records = new Map<string, OpeningRecord>();
   const rows = db
@@ -79,11 +82,12 @@ export function getOpeningEntries(profileId: number): OpeningEntry[] {
               SUM(CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END) draws,
               SUM(CASE WHEN (player_color = 'w' AND result = '0-1') OR (player_color = 'b' AND result = '1-0') THEN 1 ELSE 0 END) losses,
               AVG(accuracy) avgAccuracy, MAX(played_at) lastPlayed
-       FROM games
-       WHERE profile_id = ? AND eco IS NOT NULL AND eco <> '' AND analyzed = 1
+       FROM library_games
+       WHERE scope IN (${scopes.map(() => "?").join(",")})
+         AND eco IS NOT NULL AND eco <> '' AND analyzed = 1
        GROUP BY eco`
     )
-    .all(profileId) as Record<string, unknown>[];
+    .all(...scopes) as Record<string, unknown>[];
   for (const r of rows) {
     const games = Number(r.games ?? 0);
     records.set(String(r.eco), {
@@ -97,7 +101,7 @@ export function getOpeningEntries(profileId: number): OpeningEntry[] {
     });
   }
 
-  const reviews = new Map(listOpeningReviews(profileId).map((r) => [r.eco, r]));
+  const reviews = new Map(listOpeningReviews(scopes).map((r) => [r.eco, r]));
   const now = Date.now();
   return OPENINGS.map((o) => {
     const review = reviews.get(o.eco);

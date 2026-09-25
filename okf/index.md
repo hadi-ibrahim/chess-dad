@@ -12,7 +12,7 @@ notes the app uses to turn engine output into plain-language coaching.
 
 The app both *reads* this bundle (the deterministic coaching fallback grounds
 its explanations in [coaching-rules](concepts/coaching-rules.md)) and *writes*
-to it (per-user progress is regenerated under [progress](progress/) after
+to it (per-account progress is regenerated under [progress](progress/) after
 analysis).
 
 ## Concepts

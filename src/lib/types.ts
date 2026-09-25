@@ -14,10 +14,12 @@ export type MoveClass =
   | "forced"
   | "brilliant";
 
+/**
+ * The chess itself. A game is global: two people who played each other share one
+ * row and one analysis, so nothing here names a player, a colour or a profile.
+ */
 export interface GameRow {
   id: number;
-  /** Owning profile. */
-  profile_id: number;
   source: Source;
   external_id: string | null;
   pgn: string;
@@ -31,14 +33,24 @@ export interface GameRow {
   eco: string;
   opening_name: string;
   played_at: string | null;
+  total_plies: number;
+  analyzed: number;
+  /** Accuracy is per side, because the game does not belong to one player. */
+  accuracy_white: number | null;
+  accuracy_black: number | null;
+  created_at: string;
+}
+
+/** A game as one account saw it: their colour, their opponent, their accuracy. */
+export interface LibraryGameRow extends GameRow {
+  /** The account whose library this is, e.g. `lichess:rooronoa`. */
+  scope: string;
   player_color: Color;
   player_rating: number | null;
   opponent: string;
   opponent_rating: number | null;
-  total_plies: number;
-  analyzed: number;
+  /** The viewer's own accuracy, picked from the side they played. */
   accuracy: number | null;
-  created_at: string;
   /** Flagged moves (mistake + blunder + miss) by the player. */
   flagged?: number;
   blunders?: number;
@@ -113,19 +125,20 @@ export interface JobProgress {
   progress: number;
 }
 
+/**
+ * The derived drill: a position where someone went wrong and the move they
+ * should have found. Global, like the analysis it comes from — the practising
+ * state lives separately in `puzzle_reviews`, keyed by account.
+ */
 export interface PuzzleRow {
   id: number;
   game_id: number;
   position_id: number | null;
+  /** The side whose move it was; only they are served this drill. */
+  color: Color;
   fen: string;
   solution_uci: string;
   solution_san: string;
   theme: string | null;
-  ease: number;
-  interval_days: number;
-  repetitions: number;
-  due_at: string | null;
-  solved_count: number;
-  fail_count: number;
   created_at: string;
 }

@@ -8,6 +8,18 @@ import EvalBar from "@/components/EvalBar";
 import EvalGraph, { type EvalPoint } from "@/components/EvalGraph";
 import MoveList, { type MoveListItem } from "@/components/MoveList";
 import { classColor, classGlyph, classLabel, isError } from "@/components/colors";
+import { activeDefaultLlmId, activeLlmConnections } from "@/lib/client-profiles";
+import { connectionLabel, providerMeta, type LlmConnection } from "@/lib/llm-providers";
+
+/** One AI-written reading of this position, by one provider and model. */
+interface AiReading {
+  provider: string;
+  model: string;
+  explanation: string;
+  key_lesson: string;
+  drill_suggestion: string;
+  created_at: string;
+}
 
 interface Game {
   id: number;
@@ -52,6 +64,8 @@ interface Position {
   explanation: string | null;
   key_lesson: string | null;
   drill_suggestion: string | null;
+  /** AI readings of this exact position (newest first). Absent when there are none. */
+  ai?: AiReading[];
 }
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -73,6 +87,14 @@ function clockLabel(seconds: number | null | undefined): string | null {
 
 function moveLabel(ply: number): string {
   return `Move ${Math.floor(ply / 2) + 1}${ply % 2 === 0 ? ". White" : "… Black"}`;
+}
+
+/** SQLite stores `datetime('now')` as UTC without a zone; make it unambiguous. */
+function storedAt(value: string): string {
+  if (!value) return "";
+  const iso = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function resultSentence(game: Game): { text: string; tone: "win" | "loss" | "draw" } {
@@ -269,6 +291,15 @@ export default function GameReview({ id }: { id: string }) {
   const [confirmAnalyze, setConfirmAnalyze] = useState(false);
   const [tab, setTab] = useState<"yours" | "theirs">("yours");
 
+  // AI coaching is a separate, user-initiated action against a provider the
+  // profile owns. The connections (keys included) are read from localStorage.
+  const [connections, setConnections] = useState<LlmConnection[]>([]);
+  const [selectedConnection, setSelectedConnection] = useState("");
+  const [aiBusy, setAiBusy] = useState<null | "move" | "game">(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
+  const [aiView, setAiView] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     const res = await fetch(`/api/games/${id}`);
     if (!res.ok) {
@@ -276,9 +307,12 @@ export default function GameReview({ id }: { id: string }) {
       return;
     }
     const data = await res.json();
+    const next = (data.positions as Position[]) || [];
     setGame(data.game);
-    setPositions((data.positions as Position[]) || []);
-    setCurrentPly(-1);
+    setPositions(next);
+    // Keep the user's place across a refresh: asking the AI for an explanation
+    // must not bounce the board back to the start of the game.
+    setCurrentPly((p) => (p >= 0 && p < next.length ? p : -1));
   }, [id]);
 
   useEffect(() => {
@@ -296,6 +330,17 @@ export default function GameReview({ id }: { id: string }) {
         "",
     );
   }, [id]);
+
+  // The acting profile's AI connections. Nothing about them is fetched from the
+  // server: they are this browser's, saved on the Profiles screen.
+  useEffect(() => {
+    const list = activeLlmConnections();
+    const preferred = activeDefaultLlmId();
+    /* eslint-disable react-hooks/set-state-in-effect -- reading this browser's own storage on mount */
+    setConnections(list);
+    setSelectedConnection(list.find((c) => c.id === preferred)?.id ?? list[0]?.id ?? "");
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
 
   // Deep link from the library's "turning point" column: /review/7?ply=35
   useEffect(() => {
@@ -333,11 +378,73 @@ export default function GameReview({ id }: { id: string }) {
     }
   }
 
+  /**
+   * Ask the chosen provider to explain the current move, or every flagged move.
+   *
+   * The connection travels in the body — key included — and is used only for this
+   * request's outbound calls, exactly like the Lichess token on an import. A
+   * cached answer (same provider and model) comes back free, which is what makes
+   * re-running the same provider cheap and comparing two models a matter of one
+   * call each.
+   */
+  async function askAi(scope: "move" | "game", ply: number | null = null) {
+    const connection =
+      connections.find((c) => c.id === selectedConnection) ?? connections[0] ?? null;
+    if (!connection) {
+      setAiError("Add an AI provider on the Profiles tab first.");
+      return;
+    }
+    if (scope === "move" && ply == null) return;
+
+    setAiBusy(scope);
+    setAiError(null);
+    setAiNotice(null);
+    try {
+      const res = await fetch(`/api/games/${id}/ai`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connection,
+          ...(scope === "move" && ply != null ? { ply } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAiError(data.error || "The AI request failed.");
+        return;
+      }
+      // Reload so the new reading arrives with the same grouping the server uses.
+      await load();
+      const total = Number(data.analyzed ?? data.results?.length ?? 0);
+      const fresh = (data.results as { cached?: boolean }[] | undefined)?.filter(
+        (r) => !r.cached
+      ).length;
+      const cached = fresh == null ? 0 : total - fresh;
+      setAiNotice(
+        `${total} position${total === 1 ? "" : "s"} explained with ${connectionLabel(connection)}` +
+          (cached > 0 ? ` — ${cached} already cached, free.` : ".")
+      );
+      // A freshly generated reading is the newest; show it rather than an old pick.
+      if (scope === "move") setAiView(null);
+    } catch {
+      setAiError("The AI request failed.");
+    } finally {
+      setAiBusy(null);
+    }
+  }
+
   const playerColor: "w" | "b" = game?.player_color ?? "w";
   const orientation: "white" | "black" =
     (flipped ? (playerColor === "b" ? "w" : "b") : playerColor) === "b" ? "black" : "white";
 
   const current = currentPly >= 0 && currentPly < positions.length ? positions[currentPly] : null;
+
+  // Every AI reading stored for the selected position, newest first. The chosen
+  // one falls back to the newest when nothing (or a stale provider) is selected —
+  // this is how "Claude last time, GPT this time" stays viewable side by side.
+  const aiReadings = current?.ai ?? [];
+  const activeReading =
+    aiReadings.find((r) => `${r.provider}|${r.model}` === aiView) ?? aiReadings[0] ?? null;
 
   // Show the position BEFORE the selected move: the engine's suggested move and
   // the move actually played both start from here. Showing fen_after put the
@@ -606,7 +713,7 @@ export default function GameReview({ id }: { id: string }) {
               aria-busy={analyzing}
               className="rounded-lg border border-zinc-700 px-4 py-1.5 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-50"
             >
-              {analyzing ? "Analyzing…" : game.analyzed ? "Re-analyze" : "Analyze"}
+              {analyzing ? "Analyzing…" : game.analyzed ? "Re-run engine" : "Analyze"}
             </button>
           )}
         </div>
@@ -881,7 +988,139 @@ export default function GameReview({ id }: { id: string }) {
             </div>
           )}
 
-          <div className="order-4">
+          {/* Deeper analysis: opt-in, provider-chosen, and never a replacement.
+              The Stockfish coaching above stays exactly as it is; what the model
+              says is stored beside it and offered as a second opinion. */}
+          <section className="order-4 rounded-xl border border-indigo-900/60 bg-indigo-950/20 p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold text-zinc-100">Deeper analysis (AI)</h2>
+              <span className="text-xs text-zinc-400">
+                The engine read above is always the baseline; this is an extra look, on request.
+              </span>
+            </div>
+
+            {connections.length === 0 ? (
+              <p className="mt-2 text-sm text-zinc-300">
+                No AI provider is set up for this profile.{" "}
+                <Link href="/profiles" className="text-indigo-300 underline">
+                  Add one on the Profiles tab
+                </Link>{" "}
+                — Stockfish analysis keeps working without it.
+              </p>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <label className="sr-only" htmlFor="ai-provider">
+                  AI provider
+                </label>
+                <select
+                  id="ai-provider"
+                  value={selectedConnection}
+                  onChange={(e) => setSelectedConnection(e.target.value)}
+                  className="min-h-11 max-w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm"
+                >
+                  {connections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {connectionLabel(c)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void askAi("move", current?.ply ?? null)}
+                  disabled={!current || aiBusy !== null}
+                  aria-busy={aiBusy === "move"}
+                  className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+                >
+                  {aiBusy === "move" ? "Asking…" : "Explain this move"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void askAi("game")}
+                  disabled={aiBusy !== null}
+                  aria-busy={aiBusy === "game"}
+                  className="min-h-11 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+                >
+                  {aiBusy === "game"
+                    ? "Asking…"
+                    : `Explain all flagged moves (${
+                        playerCritical.length + theirCritical.length
+                      })`}
+                </button>
+                <Link
+                  href="/profiles"
+                  className="text-xs text-zinc-400 underline hover:text-zinc-200"
+                >
+                  Manage providers
+                </Link>
+              </div>
+            )}
+
+            {aiError ? (
+              <p role="alert" className="mt-2 text-sm text-rose-300">
+                {aiError}
+              </p>
+            ) : null}
+            {aiNotice ? (
+              <p role="status" className="mt-2 text-sm text-emerald-300">
+                {aiNotice}
+              </p>
+            ) : null}
+
+            {activeReading ? (
+              <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {aiReadings.map((r) => {
+                    const key = `${r.provider}|${r.model}`;
+                    const chosen = activeReading === r;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setAiView(key)}
+                        aria-pressed={chosen}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${
+                          chosen
+                            ? "border-indigo-500 bg-indigo-950/60 text-indigo-200"
+                            : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                        }`}
+                      >
+                        {providerMeta(r.provider)?.short ?? r.provider} · {r.model || "default"}
+                      </button>
+                    );
+                  })}
+                  <span className="ml-auto text-[11px] text-zinc-500">
+                    {storedAt(activeReading.created_at)}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-100">
+                  {activeReading.explanation}
+                </p>
+                {activeReading.key_lesson ? (
+                  <p className="mt-2 text-sm text-emerald-300">
+                    <span className="font-semibold">Lesson:</span> {activeReading.key_lesson}
+                  </p>
+                ) : null}
+                {activeReading.drill_suggestion ? (
+                  <p className="mt-2 text-sm text-zinc-300">
+                    <span className="mr-1 text-xs uppercase tracking-wider text-zinc-400">Drill</span>
+                    {activeReading.drill_suggestion}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-[11px] text-zinc-500">
+                  Saved against this exact position and provider, so asking the same model again is
+                  free and every other provider you have tried stays here.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-zinc-400">
+                {current
+                  ? "No AI reading for this move yet. Ask for one above — every provider you use is kept, so you can compare them later."
+                  : "Select a move to ask about it, or explain every flagged move in the game."}
+              </p>
+            )}
+          </section>
+
+          <div className="order-5">
             <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
                 Your evaluation

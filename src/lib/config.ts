@@ -2,8 +2,6 @@ import "server-only";
 import os from "node:os";
 import path from "node:path";
 
-export type LLMProvider = "deepseek" | "ollama" | "off";
-
 function num(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -11,6 +9,10 @@ function num(value: string | undefined, fallback: number): number {
 
 const cpus = os.cpus().length || 4;
 const defaultConcurrency = Math.min(4, Math.max(1, cpus - 1));
+// Resolved before the config object because the engine pool derives from it. The
+// pool used to be sized from the CPU count instead, so raising WORKER_CONCURRENCY
+// left the extra workers blocking on a pool that had not grown with them.
+const workerConcurrency = num(process.env.WORKER_CONCURRENCY, defaultConcurrency);
 
 /**
  * Central, server-only configuration. Every value can be overridden via
@@ -27,10 +29,13 @@ export const config = {
   engineThreads: num(process.env.ENGINE_THREADS, 2),
   engineHashMb: num(process.env.ENGINE_HASH_MB, 64),
   // Size of the Stockfish process pool. One engine is used per concurrent game.
-  enginePoolSize: num(process.env.ENGINE_POOL_SIZE, defaultConcurrency + 1),
+  enginePoolSize: num(process.env.ENGINE_POOL_SIZE, workerConcurrency + 1),
+  // How long an idle Stockfish process is kept before it is killed to give its
+  // hash table back. 0 disables reaping (engines then live for the process).
+  engineIdleMs: num(process.env.ENGINE_IDLE_MS, 5 * 60 * 1000),
 
   // Analysis worker (the queue consumer)
-  workerConcurrency: num(process.env.WORKER_CONCURRENCY, defaultConcurrency),
+  workerConcurrency,
   workerPollMs: num(process.env.WORKER_POLL_MS, 750),
   jobLeaseMs: num(process.env.JOB_LEASE_MS, 120_000),
   jobMaxAttempts: num(process.env.JOB_MAX_ATTEMPTS, 2),
@@ -39,13 +44,14 @@ export const config = {
   maxGamesPerSource: num(process.env.MAX_GAMES_PER_SOURCE, 100),
   lichessToken: process.env.LICHESS_TOKEN || "",
 
-  // LLM
-  llmProvider: (process.env.LLM_PROVIDER || "off") as LLMProvider,
-  deepseekApiKey: process.env.DEEPSEEK_API_KEY || "",
-  deepseekModel: process.env.DEEPSEEK_MODEL || "deepseek-chat",
-  deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/+$/, ""),
-  ollamaBaseUrl: (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/+$/, ""),
-  ollamaModel: process.env.OLLAMA_MODEL || "gemma4",
+  // AI coaching.
+  //
+  // There is deliberately no provider, model or API key here any more. A user
+  // configures their own providers on the Profiles screen; the key lives in their
+  // browser and rides one request, exactly like the Lichess token. The server
+  // keeps no LLM secret, so there is nothing to leak from a deployment and no
+  // operator bill to be surprised by. The one value left is the cap on how long a
+  // single provider call may take before it is abandoned.
   llmTimeoutMs: num(process.env.LLM_TIMEOUT_MS, 30_000),
 
   // OKF knowledge base

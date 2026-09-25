@@ -1,8 +1,15 @@
 import "server-only";
-import { getDb, listPuzzles, updatePuzzleSrs } from "./db";
+import {
+  getDb,
+  getPuzzleReview,
+  puzzleScopeFor,
+  upsertPuzzleReview,
+} from "./db";
 import type { PuzzleRow } from "./types";
 
 export interface PuzzleWithContext extends PuzzleRow {
+  /** The account this drill is filed under; the schedule lives with it. */
+  scope: string;
   white: string;
   black: string;
   opponent: string;
@@ -20,43 +27,64 @@ export interface PuzzleWithContext extends PuzzleRow {
   prev_san: string | null;
   /** Cached engine line for the puzzle position (UCI), used to play the drill out. */
   pv: string[];
+  /** SM-2 state for this account, defaulted when the drill is new. */
+  ease: number;
+  interval_days: number;
+  repetitions: number;
+  due_at: string | null;
+  solved_count: number;
+  fail_count: number;
 }
 
-/** All puzzles, newest first, with game context and the source position's coaching. */
-export function listPuzzlesWithContext(profileId: number): PuzzleWithContext[] {
+/**
+ * The drills this viewer is owed: puzzles derived from the side they played, in
+ * the games in their library.
+ *
+ * The puzzle itself is global — it was derived once, when the game was analysed —
+ * so the second player in that game already has their drills waiting. Only the
+ * practising state is theirs.
+ */
+export function listPuzzlesWithContext(scopes: string[]): PuzzleWithContext[] {
+  if (scopes.length === 0) return [];
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT p.*, g.white, g.black, g.opponent, g.result, g.opening_name,
+      `SELECT z.*, lg.white, lg.black, lg.opponent, lg.result, lg.opening_name,
+              lg.scope AS scope,
               pos.explanation AS source_explanation, pos.key_lesson AS source_key_lesson,
               pos.classification AS source_classification, pos.centipawn_loss AS source_cpl,
               pos.ply AS source_ply, pos.san AS source_san,
-              prev.san AS prev_san, ec.pv AS engine_pv
-       FROM puzzles p
-       JOIN games g ON g.id = p.game_id
-       LEFT JOIN positions pos ON pos.id = p.position_id
+              prev.san AS prev_san, ec.pv AS engine_pv,
+              pr.ease, pr.interval_days, pr.repetitions, pr.due_at,
+              pr.solved_count, pr.fail_count
+       FROM puzzles z
+       JOIN library_games lg ON lg.id = z.game_id AND lg.player_color = z.color
+       LEFT JOIN positions pos ON pos.id = z.position_id
        LEFT JOIN positions prev ON prev.game_id = pos.game_id AND prev.ply = pos.ply - 1
-       LEFT JOIN engine_cache ec ON ec.fen = p.fen
-       WHERE g.profile_id = ?
-       ORDER BY p.id DESC`
+       LEFT JOIN engine_cache ec ON ec.fen = z.fen
+       LEFT JOIN puzzle_reviews pr ON pr.scope = lg.scope AND pr.puzzle_id = z.id
+       WHERE lg.scope IN (${scopes.map(() => "?").join(",")})
+       ORDER BY z.id DESC`
     )
-    .all(profileId) as Record<string, unknown>[];
+    .all(...scopes) as Record<string, unknown>[];
 
   return rows.map((r) => ({
     id: Number(r.id),
     game_id: Number(r.game_id),
     position_id: r.position_id == null ? null : Number(r.position_id),
+    color: r.color === "b" ? "b" : "w",
+    scope: String(r.scope ?? ""),
     fen: String(r.fen ?? ""),
     solution_uci: String(r.solution_uci ?? ""),
     solution_san: String(r.solution_san ?? ""),
     theme: r.theme == null ? null : String(r.theme),
-    ease: Number(r.ease ?? 2.5),
-    interval_days: Number(r.interval_days ?? 0),
-    repetitions: Number(r.repetitions ?? 0),
-    due_at: r.due_at == null ? null : String(r.due_at),
-    solved_count: Number(r.solved_count ?? 0),
-    fail_count: Number(r.fail_count ?? 0),
     created_at: String(r.created_at ?? ""),
+    ease: r.ease == null ? 2.5 : Number(r.ease),
+    interval_days: r.interval_days == null ? 0 : Number(r.interval_days),
+    repetitions: r.repetitions == null ? 0 : Number(r.repetitions),
+    due_at: r.due_at == null ? null : String(r.due_at),
+    solved_count: r.solved_count == null ? 0 : Number(r.solved_count),
+    fail_count: r.fail_count == null ? 0 : Number(r.fail_count),
     white: String(r.white ?? ""),
     black: String(r.black ?? ""),
     opponent: String(r.opponent ?? ""),
@@ -85,16 +113,16 @@ export interface SrsResult {
 }
 
 /** Apply a simplified SM-2 update on a solved (or failed) puzzle. */
-export function recordPuzzleAnswer(id: number, correct: boolean): SrsResult {
-  const db = getDb();
-  const p = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id) as
-    | Record<string, unknown>
-    | undefined;
-  if (!p) throw new Error(`Puzzle ${id} not found`);
+export function recordPuzzleAnswer(scopes: string[], id: number, correct: boolean): SrsResult {
+  // The schedule is filed under the account that played the side the drill
+  // belongs to, so it follows the account between browsers.
+  const scope = puzzleScopeFor(scopes, id);
+  if (!scope) throw new Error(`Puzzle ${id} is not in this library`);
 
-  let ease = Number(p.ease ?? 2.5);
-  let interval = Number(p.interval_days ?? 0);
-  let reps = Number(p.repetitions ?? 0);
+  const current = getPuzzleReview(scope, id);
+  let ease = current.ease;
+  let interval = current.interval_days;
+  let reps = current.repetitions;
 
   if (correct) {
     reps += 1;
@@ -109,21 +137,23 @@ export function recordPuzzleAnswer(id: number, correct: boolean): SrsResult {
   }
 
   const dueAt = new Date(Date.now() + interval * 86_400_000).toISOString();
-  updatePuzzleSrs(id, ease, interval, reps, dueAt, correct);
+  upsertPuzzleReview(scope, id, ease, interval, reps, dueAt, correct);
 
   return { id, correct, ease, intervalDays: interval, repetitions: reps, dueAt };
 }
 
-export function countDuePuzzles(profileId: number): number {
-  const db = getDb();
+/** How many drills are waiting right now, for the nav badge. */
+export function countDuePuzzles(scopes: string[]): number {
+  if (scopes.length === 0) return 0;
   const now = new Date().toISOString();
-  const r = db
+  const r = getDb()
     .prepare(
-      `SELECT COUNT(*) n FROM puzzles z JOIN games g ON g.id = z.game_id
-       WHERE g.profile_id = ? AND (z.due_at IS NULL OR z.due_at <= ?)`
+      `SELECT COUNT(*) n FROM puzzles z
+       JOIN library_games lg ON lg.id = z.game_id AND lg.player_color = z.color
+       LEFT JOIN puzzle_reviews pr ON pr.scope = lg.scope AND pr.puzzle_id = z.id
+       WHERE lg.scope IN (${scopes.map(() => "?").join(",")})
+         AND (pr.due_at IS NULL OR pr.due_at <= ?)`
     )
-    .get(profileId, now) as { n: number };
+    .get(...scopes, now) as { n: number };
   return Number(r.n);
 }
-
-export { listPuzzles };

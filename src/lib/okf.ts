@@ -32,34 +32,53 @@ function parseFrontmatter(raw: string): { fm: Record<string, string>; body: stri
 }
 
 export function readOkfDoc(relativePath: string): OkfDoc | null {
-  const full = path.join(config.okfDir, relativePath);
+  const root = path.resolve(config.okfDir);
+  const full = path.resolve(root, relativePath);
+  // Confine reads to the bundle. `path.join` normalises `..`, so without this
+  // check a caller-supplied path walks straight out of `okf/`. Nothing passes a
+  // user-controlled path today — the coach reads fixed filenames — but the guard
+  // is what keeps that true if anyone ever wires this to a request.
+  if (full !== root && !full.startsWith(root + path.sep)) return null;
+  if (path.extname(full) !== ".md") return null;
   if (!fs.existsSync(full)) return null;
   const raw = fs.readFileSync(full, "utf8");
   const { fm, body } = parseFrontmatter(raw);
   return { path: relativePath, frontmatter: fm, body };
 }
 
-/** List the markdown files in an OKF directory (one level deep). */
-export function listOkfDir(relativeDir: string): string[] {
-  const full = path.join(config.okfDir, relativeDir);
-  if (!fs.existsSync(full)) return [];
-  return fs
-    .readdirSync(full)
-    .filter((f) => f.endsWith(".md"))
-    .map((f) => path.join(relativeDir, f).replace(/\\/g, "/"));
-}
-
-/** Extract the markdown section body under a `## Heading`. */
+/**
+ * Extract the markdown section body under a heading, at any level.
+ *
+ * The bundle mixes heading levels: `coaching-rules.md` uses `## Move
+ * classification: blunder`, while `tactical-motifs.md` uses `# How to train`. This
+ * used to match only `##`, so the drill text could never be found and
+ * `readCoachingRules` always returned an empty drill — the coach then silently
+ * fell back to hard-coded text instead of the knowledge base it claims to be
+ * grounded in.
+ */
 function sectionUnder(body: string, heading: string): string | null {
   const lines = body.split("\n");
-  const idx = lines.findIndex((l) => l.trim() === `## ${heading}`);
-  if (idx === -1) return null;
+  const wanted = heading.trim().toLowerCase();
+
+  const start = lines.findIndex((line) => {
+    const m = line.match(/^(#{1,6})\s+(.*?)\s*$/);
+    return m ? m[2].toLowerCase() === wanted : false;
+  });
+  if (start === -1) return null;
+
+  const level = (lines[start].match(/^(#{1,6})/) as RegExpMatchArray)[1].length;
   const out: string[] = [];
-  for (let i = idx + 1; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i])) break;
+  for (let i = start + 1; i < lines.length; i++) {
+    const next = lines[i].match(/^(#{1,6})\s/);
+    // A section ends at the next heading of the same or a higher level.
+    if (next && next[1].length <= level) break;
     out.push(lines[i]);
   }
-  const text = out.join("\n").trim();
+
+  const text = out
+    .filter((line) => !/^\[\^[^\]]+\]:/.test(line.trim())) // drop footnote definitions
+    .join("\n")
+    .trim();
   return text || null;
 }
 

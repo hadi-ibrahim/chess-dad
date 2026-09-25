@@ -56,4 +56,4 @@ and a full beard, on its own black ground.
 | Puzzles (`/puzzles`) | Operate | Drill your own mistakes on a spaced-repetition curve |
 | Openings (`/openings`) | Operate | Step through and practise a repertoire |
 | Profiles (`/profiles`) | Operate | Who is using this, and switch between them |
-| Knowledge (`/knowledge`) | Read | The OKF bundle this app reasons from |
+| Learn (`/lessons`) | Read | Beginner chess basics, each with one small puzzle |
