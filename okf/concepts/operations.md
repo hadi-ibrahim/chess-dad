@@ -152,7 +152,12 @@ sit at the front of the queue ahead of everyone else.
 * **A volume.** `CHESSDAD_DB_PATH` must point at mounted storage. The default is
   relative to the working directory, which on an ephemeral container filesystem is
   discarded on every redeploy — silently destroying every imported game and the
-  analysis behind it.
+  analysis behind it. The app now checks this itself: `GET /api/health` reports
+  `storage.dbPath`, `storage.dataDir` and `storage.mount` (`mounted`,
+  `not-mounted`, or `unknown` off Linux), and boot logs
+  `boot: data will not survive a redeploy` when a container's data directory is
+  not a mount. It is a warning, not a health failure — refusing to serve a working
+  app over it would be worse than saying so loudly. See `src/lib/host.ts`.
 * **The engine.** The image installs the same pinned Stockfish as local
   development, so a laptop and production run identical builds. See
   [Updating Stockfish](../../docs/updating-stockfish.md).

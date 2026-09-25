@@ -7,6 +7,7 @@ import { getDb } from "./db";
 import { getJobStats } from "./queue";
 import { getWorkerState } from "./worker";
 import { log } from "./log";
+import { inContainer, mountState, type MountState } from "./host";
 
 /**
  * Liveness and readiness for the deployment.
@@ -39,6 +40,18 @@ export interface HealthReport {
   };
   queue: { queued: number; running: number; failed: number; depth: number; capacity: number };
   games: { total: number; analyzed: number; pending: number };
+  /**
+   * Where the database actually is, and whether that directory survives a
+   * redeploy. Reported rather than enforced: a missing volume is a data-loss
+   * warning, not a reason to roll back an otherwise working deploy.
+   */
+  storage: {
+    dbPath: string;
+    dataDir: string;
+    mount: MountState;
+    container: boolean;
+    warning?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +85,35 @@ function checkDisk(): Check & { freeMb?: number } {
     // Not every platform exposes statfs; do not fail health for that.
     return { ok: true };
   }
+}
+
+/**
+ * Where the database is, and whether that directory outlives the container.
+ *
+ * A container whose data directory is not a mount is the quiet data-loss case: it
+ * runs fine, then the next deploy starts from an empty database. Reported as a
+ * warning rather than a failure, because refusing to serve a working app over it
+ * would be worse than saying so loudly.
+ */
+function storageReport(): HealthReport["storage"] {
+  const dataDir = path.dirname(config.dbPath);
+  const mount = mountState(dataDir);
+  const container = inContainer();
+  const ephemeral = container && mount === "not-mounted";
+
+  return {
+    dbPath: config.dbPath,
+    dataDir,
+    mount,
+    container,
+    ...(ephemeral
+      ? {
+          warning:
+            `${dataDir} is not a mounted volume, so this database will be destroyed on the ` +
+            `next deploy. Attach a volume at ${dataDir} (Railway → service → Volumes).`,
+        }
+      : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +250,7 @@ export async function healthReport(): Promise<HealthReport> {
     checks,
     queue,
     games,
+    storage: storageReport(),
   };
 }
 
@@ -220,6 +263,12 @@ export async function bootProbe(): Promise<void> {
   const db = checkDb();
   if (db.ok) log.info("boot: database ready", { dbPath: config.dbPath });
   else log.error("boot: database is not usable — every request will fail", { dbPath: config.dbPath });
+
+  // Say it at boot, not only on /api/health: this is the one warning whose
+  // consequence (an empty library after the next deploy) is unrecoverable.
+  const storage = storageReport();
+  if (storage.warning) log.warn("boot: data will not survive a redeploy", storage);
+  else log.info("boot: storage", { dbPath: storage.dbPath, mount: storage.mount });
 
   const disk = checkDisk();
   if (disk.freeMb != null) log.info("boot: disk", { freeMb: disk.freeMb, ok: disk.ok });

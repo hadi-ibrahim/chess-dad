@@ -317,7 +317,9 @@ Three things are not optional on a real host:
   (`/data/chessdad.db`). The default is `./data/chessdad.db` relative to the
   working directory, which on a container with an ephemeral filesystem is thrown
   away on every redeploy — silently destroying every imported game and every hour
-  of analysis behind it.
+  of analysis behind it. You can confirm it took: `GET /api/health` reports
+  `storage.dbPath` and `storage.mount`, and the boot log warns
+  `data will not survive a redeploy` when the directory is not a mount.
 * **The engine.** `STOCKFISH_PATH`, unless `stockfish` is on `PATH`. Boot logs
   loudly if it cannot start, and `/api/health` returns 503.
 * **Abuse protection, if the URL is public.** The per-IP limits in
