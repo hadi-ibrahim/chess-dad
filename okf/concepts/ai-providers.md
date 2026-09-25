@@ -80,6 +80,28 @@ unbounded, and have blown past any sane timeout — paid for and then discarded.
   remaining position would fail identically. A **content** failure (an empty
   answer, or one that names an illegal move) does not stop the run.
 
+# Listing models
+
+The static `models` array in the registry is only a hint for the moment before a
+catalogue is loaded — a list in code goes stale the day a provider ships a new
+model, and a `<datalist>` is a poor way to show a long one. The Profiles picker
+therefore loads the real list with **`POST /api/llm/models`**, which takes the same
+connection body as the analysis call and reads the provider's own endpoint:
+
+| Kind | Endpoint |
+|---|---|
+| openai (OpenAI, DeepSeek, custom) | `{base}/models` |
+| anthropic | `{base}/models?limit=100` |
+| google | `{base}/models?pageSize=200`, keeping only `generateContent` entries |
+| ollama | `{base}/api/tags` |
+
+The result is de-duplicated, sorted, capped at 300, and returned as
+`{ id, label? }`. The picker shows it as a filterable list, so a provider with a
+hundred models is still usable, and any id can be typed by hand. The key is used
+for this one call and stored nowhere; the base URL goes through the same
+validation the analysis route uses, so this cannot probe a host the other route
+would refuse.
+
 # Where the answer lives
 
 Each answer is one row in `ai_explanations`, and several rows may exist for the

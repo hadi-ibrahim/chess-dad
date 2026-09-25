@@ -200,6 +200,13 @@ export interface LlmConnection {
   thinking: boolean;
 }
 
+/** One entry in a provider's model catalogue, as its list endpoint returns it. */
+export interface ModelOption {
+  id: string;
+  /** A friendlier name, when the provider has one worth showing. */
+  label?: string;
+}
+
 export function emptyConnection(provider: ProviderId = "openai", id = ""): LlmConnection {
   const meta = providerMeta(provider) ?? PROVIDERS[0];
   return {
