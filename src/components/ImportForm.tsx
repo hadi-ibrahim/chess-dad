@@ -35,7 +35,7 @@ function label(p: ActiveProfile): string {
  * pulling and analysing a hundred games. The choice is remembered in the browser,
  * because having it reset every visit was the annoying part.
  */
-const MAX_OPTIONS = [5, 10, 25, 50, 100, 200];
+const MAX_OPTIONS = [5, 10, 25, 50, 100];
 const MAX_STORAGE_KEY = "cd_import_max";
 const DEFAULT_MAX = 100;
 
@@ -126,6 +126,9 @@ export default function ImportForm({ onImported }: { onImported: () => void }) {
         .map(
           (a) =>
             `${a.source}: ${a.imported} game${a.imported === 1 ? "" : "s"}` +
+            // Say when the site sent fewer than were asked for — a throttled or
+            // truncated export otherwise reads as "the account only has one game".
+            (a.imported < max ? ` of ${max} asked` : "") +
             (a.alreadyKnown ? ` (${a.alreadyKnown} already here)` : "") +
             (a.analysisQueued ? `, ${a.analysisQueued} queued to analyse` : "")
         );

@@ -190,16 +190,31 @@ export async function fetchLichessGames(
     if (res.ok) {
       const text = await res.text();
       const games: ImportedGame[] = [];
+      let streamError: string | null = null;
       for (const line of text.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-          const parsed = parseLichessGame(JSON.parse(trimmed) as LichessGameJson, username);
+          const json = JSON.parse(trimmed) as LichessGameJson & { error?: unknown };
+          // Lichess can answer 200 and then write an error object into the stream —
+          // its concurrency limit ("Please only run 1 request(s) at a time") does
+          // exactly this. Ignoring that line made a throttled export look like
+          // "the account only has one game", so it is surfaced instead.
+          if (typeof json.error === "string") {
+            streamError = json.error;
+            continue;
+          }
+          const parsed = parseLichessGame(json, username);
           if (parsed) games.push(parsed);
         } catch {
           // skip malformed lines
         }
       }
+      if (games.length === 0 && streamError) {
+        throw new Error(`Lichess returned no games: ${streamError}`);
+      }
+      // A short list with an error in it is returned as-is: whatever arrived is
+      // still worth keeping, and the caller reports it against what was asked for.
       return games;
     }
 
