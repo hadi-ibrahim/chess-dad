@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   PROVIDERS,
+  clampTimeout,
   connectionLabel,
   emptyConnection,
   providerMeta,
@@ -210,6 +211,7 @@ export default function LlmConnections({
       model,
       apiKey,
       baseUrl,
+      timeoutMs: clampTimeout(draft.timeoutMs),
     };
     const next = editingId
       ? connections.map((c) => (c.id === editingId ? connection : c))
@@ -258,6 +260,7 @@ export default function LlmConnections({
                     {providerMeta(c.provider)?.label ?? c.provider}
                     {c.apiKey ? " · key saved" : c.provider === "ollama" ? " · no key" : " · no key saved"}
                     {c.thinking ? " · reasoning on" : ""}
+                    {c.timeoutMs > 0 ? ` · ${Math.round(c.timeoutMs / 1000)}s timeout` : ""}
                   </p>
                 </div>
                 {!isDefault ? (
@@ -459,6 +462,32 @@ export default function LlmConnections({
                 </span>
               </label>
             ) : null}
+            <label className="block text-sm">
+              <span className="text-zinc-300">
+                Timeout <span className="text-zinc-400">(seconds, optional)</span>
+              </span>
+              <input
+                type="number"
+                min={10}
+                max={600}
+                step={10}
+                inputMode="numeric"
+                value={draft.timeoutMs > 0 ? String(Math.round(draft.timeoutMs / 1000)) : ""}
+                onChange={(e) => {
+                  const seconds = Number(e.target.value);
+                  setDraft({
+                    ...draft,
+                    timeoutMs: e.target.value === "" || !Number.isFinite(seconds) ? 0 : seconds * 1000,
+                  });
+                }}
+                placeholder="Default (120)"
+                className={FIELD}
+              />
+              <span className="mt-1 block text-xs text-zinc-400">
+                How long to wait for one answer. Raise it for a reasoning model that thinks for a
+                while; blank uses the server default. 10–600s.
+              </span>
+            </label>
             {meta.supportsThinkingToggle ? (
               <label className="flex items-start gap-2 text-sm sm:col-span-2">
                 <input

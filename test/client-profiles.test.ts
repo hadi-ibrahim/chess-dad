@@ -127,6 +127,7 @@ describe("client-profiles", () => {
       apiKey: "sk-ant-secret",
       baseUrl: "",
       thinking: false,
+      timeoutMs: 0,
     };
     const profiles: StoredProfile[] = [
       {
@@ -249,6 +250,7 @@ describe("client-profiles", () => {
       apiKey: "SUPERSECRETAPIKEY",
       baseUrl: "",
       thinking: false,
+      timeoutMs: 0,
     };
     const p = createProfile("Alice", "alice", "alice-cc", "SUPERSECRETTOKEN", [connection], "c1");
     saveProfiles([p]);
@@ -271,6 +273,7 @@ describe("client-profiles", () => {
       apiKey: "k",
       baseUrl: "",
       thinking: false,
+      timeoutMs: 0,
     };
     const a = createProfile("Alice", "alice", "", "", [connection], "c1");
     const b = createProfile("Bob", "bob", "", "");

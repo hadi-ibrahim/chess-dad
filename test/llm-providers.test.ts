@@ -11,6 +11,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   PROVIDERS,
+  TIMEOUT_MAX_MS,
+  clampTimeout,
   connectionLabel,
   emptyConnection,
   normaliseConnection,
@@ -61,6 +63,7 @@ describe("provider catalogue", () => {
       apiKey: "",
       baseUrl: "",
       thinking: false,
+      timeoutMs: 0,
     };
     assert.equal(connectionLabel(base), "Claude · claude-sonnet-4-5");
     assert.equal(connectionLabel({ ...base, label: "Work Claude" }), "Work Claude · claude-sonnet-4-5");
@@ -79,8 +82,21 @@ describe("provider catalogue", () => {
   });
 });
 
-describe("ratingBand", () => {
-  test("rounds to the nearest 200", () => {
+describe("clampTimeout", () => {
+  test("zero or nonsense means 'use the server default'", () => {
+    assert.equal(clampTimeout(0), 0);
+    assert.equal(clampTimeout(-5), 0);
+    assert.equal(clampTimeout(Number.NaN), 0);
+  });
+
+  test("clamps to a usable range rather than trusting the input", () => {
+    assert.equal(clampTimeout(1), 10_000);
+    assert.equal(clampTimeout(120_000), 120_000);
+    assert.equal(clampTimeout(99_999_999), TIMEOUT_MAX_MS);
+  });
+});
+
+describe("ratingBand", () => {  test("rounds to the nearest 200", () => {
     assert.equal(ratingBand(1200), 1200);
     assert.equal(ratingBand(1099), 1000);
     assert.equal(ratingBand(1100), 1200);

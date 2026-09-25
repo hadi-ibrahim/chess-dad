@@ -39,6 +39,7 @@ function connection(overrides: Partial<LlmConnection> = {}): LlmConnection {
     apiKey: "sk-test",
     baseUrl: "",
     thinking: false,
+    timeoutMs: 0,
     ...overrides,
   };
 }

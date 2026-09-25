@@ -299,6 +299,8 @@ export default function GameReview({ id }: { id: string }) {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [aiView, setAiView] = useState<string | null>(null);
+  /** Seconds spent on the current AI request, so a slow model is not a blank wait. */
+  const [aiElapsed, setAiElapsed] = useState(0);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/games/${id}`);
@@ -399,6 +401,16 @@ export default function GameReview({ id }: { id: string }) {
     setAiBusy(scope);
     setAiError(null);
     setAiNotice(null);
+    setAiElapsed(0);
+
+    // A reasoning model can take minutes, so the wait is shown rather than looking
+    // like a hang.
+    const startedAt = Date.now();
+    const ticker = setInterval(
+      () => setAiElapsed(Math.round((Date.now() - startedAt) / 1000)),
+      1000
+    );
+
     try {
       const res = await fetch(`/api/games/${id}/ai`, {
         method: "POST",
@@ -420,15 +432,25 @@ export default function GameReview({ id }: { id: string }) {
         (r) => !r.cached
       ).length;
       const cached = fresh == null ? 0 : total - fresh;
-      setAiNotice(
-        `${total} position${total === 1 ? "" : "s"} explained with ${connectionLabel(connection)}` +
-          (cached > 0 ? ` — ${cached} already cached, free.` : ".")
-      );
+
+      if (data.stoppedEarly) {
+        setAiNotice(
+          `${total} position${total === 1 ? "" : "s"} explained with ${connectionLabel(connection)} ` +
+            `before the time budget ran out. Run it again to continue — what is already done is ` +
+            `cached and free.`
+        );
+      } else {
+        setAiNotice(
+          `${total} position${total === 1 ? "" : "s"} explained with ${connectionLabel(connection)}` +
+            (cached > 0 ? ` — ${cached} already cached, free.` : ".")
+        );
+      }
       // A freshly generated reading is the newest; show it rather than an old pick.
       if (scope === "move") setAiView(null);
     } catch {
       setAiError("The AI request failed.");
     } finally {
+      clearInterval(ticker);
       setAiBusy(null);
     }
   }
@@ -1031,7 +1053,7 @@ export default function GameReview({ id }: { id: string }) {
                   aria-busy={aiBusy === "move"}
                   className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
                 >
-                  {aiBusy === "move" ? "Asking…" : "Explain this move"}
+                  {aiBusy === "move" ? `Asking… ${aiElapsed}s` : "Explain this move"}
                 </button>
                 <button
                   type="button"
@@ -1041,7 +1063,7 @@ export default function GameReview({ id }: { id: string }) {
                   className="min-h-11 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
                 >
                   {aiBusy === "game"
-                    ? "Asking…"
+                    ? `Asking… ${aiElapsed}s`
                     : `Explain all flagged moves (${
                         playerCritical.length + theirCritical.length
                       })`}
@@ -1054,6 +1076,13 @@ export default function GameReview({ id }: { id: string }) {
                 </Link>
               </div>
             )}
+
+            {connections.length > 0 ? (
+              <p className="mt-1 text-[11px] text-zinc-500">
+                A reasoning model can take a minute or more per move. The wait is per provider — set
+                a longer timeout on the Profiles tab if one is slow.
+              </p>
+            ) : null}
 
             {aiError ? (
               <p role="alert" className="mt-2 text-sm text-rose-300">

@@ -358,20 +358,46 @@ function redact(value: string, secret: string): string {
   return value.split(secret).join("[redacted]");
 }
 
+/**
+ * What a user sees when a call runs out of time.
+ *
+ * Slow reasoning models are the usual cause, and the fix is a per-connection
+ * timeout on the Profiles tab, so the message says that instead of only naming a
+ * number of seconds.
+ */
+function timeoutMessage(label: string, timeoutMs: number): string {
+  return (
+    `${label} did not finish within ${Math.round(timeoutMs / 1000)}s. ` +
+    `Slow reasoning models can need longer — raise the timeout for this provider on the Profiles tab.`
+  );
+}
+
+interface TokenUsage {
+  prompt?: number;
+  completion?: number;
+  total?: number;
+}
+
+interface ProviderReply {
+  text: string;
+  model: string;
+}
+
 async function postJson(
   url: string,
   init: RequestInit,
   secret: string,
-  label: string
+  label: string,
+  timeoutMs: number
 ): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
     const err = e as Error;
     const message =
       err.name === "TimeoutError"
-        ? `${label} did not answer within ${Math.round(config.llmTimeoutMs / 1000)}s.`
+        ? timeoutMessage(label, timeoutMs)
         : `${label} could not be reached: ${redact(err.message, secret)}`;
     throw new AiRequestError(message, "connection");
   }
@@ -394,9 +420,83 @@ async function postJson(
   }
 }
 
-interface ProviderReply {
-  text: string;
-  model: string;
+/**
+ * Read a streamed response line by line, handing each line to the provider's
+ * parser as it arrives.
+ *
+ * Streaming is what makes a slow model survivable: without it a long generation
+ * is indistinguishable from a dead connection, and an intermediary proxy is free
+ * to cut an idle one. The call is still bounded — by the per-connection timeout,
+ * which is exactly the knob a user raises for a model that thinks for a while —
+ * but nothing is killed merely for taking time.
+ *
+ * Five providers means four line formats (SSE for OpenAI-kind, Anthropic and
+ * Gemini; NDJSON for Ollama), so this only extracts lines; each caller reads the
+ * event it expects.
+ */
+async function streamProviderResponse(
+  url: string,
+  init: RequestInit,
+  secret: string,
+  label: string,
+  timeoutMs: number,
+  onLine: (line: string) => void
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    const err = e as Error;
+    const message =
+      err.name === "TimeoutError"
+        ? timeoutMessage(label, timeoutMs)
+        : `${label} could not be reached: ${redact(err.message, secret)}`;
+    throw new AiRequestError(message, "connection");
+  }
+
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 400);
+    } catch {
+      // A body we cannot read is not worth a second failure.
+    }
+    throw new AiRequestError(
+      `${label} API error ${res.status}${detail ? `: ${redact(detail, secret)}` : ""}`,
+      "connection"
+    );
+  }
+  if (!res.body) throw new AiRequestError(`${label} returned an empty response.`, "connection");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        if (line) onLine(line);
+      }
+    }
+    const tail = (buffer + decoder.decode()).replace(/\r$/, "");
+    if (tail) onLine(tail);
+  } catch (e) {
+    const err = e as Error;
+    // Aborting a body read can surface as either name depending on where the
+    // signal fired, so both are treated as the timeout they are.
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
+      throw new AiRequestError(timeoutMessage(label, timeoutMs), "connection");
+    }
+    throw new AiRequestError(
+      `${label} stream ended unexpectedly: ${redact(err.message, secret)}`,
+      "connection"
+    );
+  }
 }
 
 /**
@@ -421,7 +521,11 @@ function isReasoningModel(model: string): boolean {
  * is reached only after `sanitizeConnection()` has validated the URL — see
  * `llm-providers.ts`.
  */
-async function callProvider(connection: LlmConnection, i: ExplainInput): Promise<ProviderReply> {
+async function callProvider(
+  connection: LlmConnection,
+  i: ExplainInput,
+  timeoutMs: number
+): Promise<ProviderReply> {
   const meta = providerMeta(connection.provider);
   if (!meta) throw new AiRequestError("Unknown provider.", "connection");
 
@@ -429,7 +533,6 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
   const system = SYSTEM(i.rating);
   const user = buildUserPrompt(i);
   const base = (connection.baseUrl || meta.defaultBaseUrl || "").replace(/\/+$/, "");
-  const signal = AbortSignal.timeout(config.llmTimeoutMs);
 
   switch (meta.kind) {
     case "openai": {
@@ -454,7 +557,37 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
       }
       if (meta.supportsJsonMode) body.response_format = { type: "json_object" };
 
-      const data = (await postJson(
+      if (connection.provider === "custom") {
+        // A user-supplied endpoint is the one thing we cannot assume supports
+        // streaming, so it stays a single request; the known providers stream.
+        const data = (await postJson(
+          `${base}/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(connection.apiKey ? { Authorization: `Bearer ${connection.apiKey}` } : {}),
+            },
+            body: JSON.stringify(body),
+          },
+          connection.apiKey,
+          meta.label,
+          timeoutMs
+        )) as {
+          choices?: { message?: { content?: string } }[];
+          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+        };
+        recordUsage(meta.id, model, {
+          prompt: data.usage?.prompt_tokens,
+          completion: data.usage?.completion_tokens,
+          total: data.usage?.total_tokens,
+        });
+        return { text: data.choices?.[0]?.message?.content ?? "", model };
+      }
+
+      let text = "";
+      let usage: TokenUsage = {};
+      await streamProviderResponse(
         `${base}/chat/completions`,
         {
           method: "POST",
@@ -462,25 +595,49 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
             "Content-Type": "application/json",
             ...(connection.apiKey ? { Authorization: `Bearer ${connection.apiKey}` } : {}),
           },
-          body: JSON.stringify(body),
-          signal,
+          body: JSON.stringify({
+            ...body,
+            stream: true,
+            // Asks the provider to close the stream with a usage block; a provider
+            // that ignores it simply reports no tokens rather than failing.
+            stream_options: { include_usage: true },
+          }),
         },
         connection.apiKey,
-        meta.label
-      )) as {
-        choices?: { message?: { content?: string } }[];
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-      };
-      recordUsage(meta.id, model, {
-        prompt: data.usage?.prompt_tokens,
-        completion: data.usage?.completion_tokens,
-        total: data.usage?.total_tokens,
-      });
-      return { text: data.choices?.[0]?.message?.content ?? "", model };
+        meta.label,
+        timeoutMs,
+        (line) => {
+          if (!line.startsWith("data:")) return;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") return;
+          let event: {
+            choices?: { delta?: { content?: string } }[];
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+          };
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            return;
+          }
+          const delta = event.choices?.[0]?.delta?.content;
+          if (typeof delta === "string") text += delta;
+          if (event.usage) {
+            usage = {
+              prompt: event.usage.prompt_tokens,
+              completion: event.usage.completion_tokens,
+              total: event.usage.total_tokens,
+            };
+          }
+        }
+      );
+      recordUsage(meta.id, model, usage);
+      return { text, model };
     }
 
     case "anthropic": {
-      const data = (await postJson(
+      let text = "";
+      const usage: TokenUsage = {};
+      await streamProviderResponse(
         `${base}/messages`,
         {
           method: "POST",
@@ -496,30 +653,43 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
             // flagship models, and thinking rejects a temperature other than 1.
             system,
             messages: [{ role: "user", content: user }],
+            stream: true,
           }),
-          signal,
         },
         connection.apiKey,
-        meta.label
-      )) as {
-        content?: { type?: string; text?: string }[];
-        usage?: { input_tokens?: number; output_tokens?: number };
-      };
-      recordUsage(meta.id, model, {
-        prompt: data.usage?.input_tokens,
-        completion: data.usage?.output_tokens,
-      });
-      const text = (data.content ?? [])
-        .filter((block) => block.type === "text")
-        .map((block) => block.text ?? "")
-        .join("")
-        .trim();
-      return { text, model };
+        meta.label,
+        timeoutMs,
+        (line) => {
+          if (!line.startsWith("data:")) return;
+          const payload = line.slice(5).trim();
+          if (!payload) return;
+          let event: {
+            type?: string;
+            delta?: { text?: string };
+            message?: { usage?: { input_tokens?: number } };
+            usage?: { output_tokens?: number };
+          };
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            return;
+          }
+          if (event.type === "content_block_delta" && typeof event.delta?.text === "string") {
+            text += event.delta.text;
+          }
+          if (event.type === "message_start") usage.prompt = event.message?.usage?.input_tokens;
+          if (event.type === "message_delta") usage.completion = event.usage?.output_tokens;
+        }
+      );
+      recordUsage(meta.id, model, usage);
+      return { text: text.trim(), model };
     }
 
     case "google": {
-      const data = (await postJson(
-        `${base}/models/${encodeURIComponent(model)}:generateContent`,
+      let text = "";
+      const usage: TokenUsage = {};
+      await streamProviderResponse(
+        `${base}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
         {
           method: "POST",
           // A header, never `?key=`: a URL is the easiest thing to end up in a log.
@@ -532,32 +702,46 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
               responseMimeType: "application/json",
             },
           }),
-          signal,
         },
         connection.apiKey,
-        meta.label
-      )) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-        usageMetadata?: {
-          promptTokenCount?: number;
-          candidatesTokenCount?: number;
-          totalTokenCount?: number;
-        };
-      };
-      recordUsage(meta.id, model, {
-        prompt: data.usageMetadata?.promptTokenCount,
-        completion: data.usageMetadata?.candidatesTokenCount,
-        total: data.usageMetadata?.totalTokenCount,
-      });
-      const text = (data.candidates?.[0]?.content?.parts ?? [])
-        .map((part) => part.text ?? "")
-        .join("")
-        .trim();
-      return { text, model };
+        meta.label,
+        timeoutMs,
+        (line) => {
+          if (!line.startsWith("data:")) return;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") return;
+          let event: {
+            candidates?: { content?: { parts?: { text?: string }[] } }[];
+            usageMetadata?: {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              totalTokenCount?: number;
+            };
+          };
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            return;
+          }
+          for (const part of event.candidates?.[0]?.content?.parts ?? []) {
+            if (typeof part.text === "string") text += part.text;
+          }
+          const meta2 = event.usageMetadata;
+          if (meta2) {
+            usage.prompt = meta2.promptTokenCount;
+            usage.completion = meta2.candidatesTokenCount;
+            usage.total = meta2.totalTokenCount;
+          }
+        }
+      );
+      recordUsage(meta.id, model, usage);
+      return { text: text.trim(), model };
     }
 
     case "ollama": {
-      const data = (await postJson(
+      let text = "";
+      const usage: TokenUsage = {};
+      await streamProviderResponse(
         `${base}/api/chat`,
         {
           method: "POST",
@@ -569,22 +753,34 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
               { role: "user", content: user },
             ],
             format: "json",
-            stream: false,
+            stream: true,
           }),
-          signal,
         },
         "",
-        meta.label
-      )) as {
-        message?: { content?: string };
-        prompt_eval_count?: number;
-        eval_count?: number;
-      };
-      recordUsage(meta.id, model, {
-        prompt: data.prompt_eval_count,
-        completion: data.eval_count,
-      });
-      return { text: data.message?.content ?? "", model };
+        meta.label,
+        timeoutMs,
+        (line) => {
+          if (!line.trim()) return;
+          let event: {
+            message?: { content?: string };
+            done?: boolean;
+            prompt_eval_count?: number;
+            eval_count?: number;
+          };
+          try {
+            event = JSON.parse(line);
+          } catch {
+            return;
+          }
+          if (typeof event.message?.content === "string") text += event.message.content;
+          if (event.done) {
+            usage.prompt = event.prompt_eval_count;
+            usage.completion = event.eval_count;
+          }
+        }
+      );
+      recordUsage(meta.id, model, usage);
+      return { text: text.trim(), model };
     }
   }
 }
@@ -594,6 +790,14 @@ export interface AiExplainResult extends LLMExplanation {
   model: string;
   /** True when this exact provider+model already had an answer for the position. */
   cached: boolean;
+}
+
+export interface AiCallOptions {
+  /**
+   * A ceiling for this one call, on top of the connection's own timeout. The batch
+   * route uses it so a long game cannot run past the request's time budget.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -606,10 +810,19 @@ export interface AiExplainResult extends LLMExplanation {
 export async function aiExplainPosition(
   i: ExplainInput,
   connection: LlmConnection,
-  key: AiExplanationKey
+  key: AiExplanationKey,
+  opts: AiCallOptions = {}
 ): Promise<AiExplainResult> {
   const meta = providerMeta(connection.provider);
   const model = (connection.model || meta?.defaultModel || "").trim();
+
+  // A connection may set its own timeout for a slow model; the batch ceiling only
+  // ever lowers it, never raises it.
+  const configured = connection.timeoutMs > 0 ? connection.timeoutMs : config.llmTimeoutMs;
+  const timeoutMs = Math.max(
+    5_000,
+    Math.min(configured, opts.timeoutMs ?? Number.POSITIVE_INFINITY)
+  );
 
   const cached = getAiExplanation(key, connection.provider, model);
   if (cached) {
@@ -623,7 +836,7 @@ export async function aiExplainPosition(
     };
   }
 
-  const reply = await callProvider(connection, i);
+  const reply = await callProvider(connection, i, timeoutMs);
   const parsed = parseExplanation(reply.text);
   if (!parsed.explanation || parsed.explanation === "No explanation available.") {
     throw new AiRequestError(

@@ -4,9 +4,14 @@ import { viewerOf } from "@/lib/library";
 import { aiKeyFor, explainInputFor } from "@/lib/ai-context";
 import { AiRequestError, aiExplainPosition, llmUsage } from "@/lib/llm";
 import { sanitizeConnection } from "@/lib/llm-providers";
+import { config } from "@/lib/config";
 
-/** A whole-game run is one request per critical move, each up to LLM_TIMEOUT_MS. */
-export const maxDuration = 300;
+/**
+ * A whole-game run is one request per flagged move, and a slow reasoning model can
+ * take minutes for one of them. The ceiling is the batch budget rather than the
+ * platform's default, so the route can finish and return partial results.
+ */
+export const maxDuration = 600;
 export const dynamic = "force-dynamic";
 
 /**
@@ -86,9 +91,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }[] = [];
   const errors: { ply: number; message: string; kind: "connection" | "content" }[] = [];
 
+  // A time budget, not just a position cap. A slow model makes 40 calls take far
+  // longer than any request should, so once the budget is nearly spent the loop
+  // stops and the readings it already has are returned. Running again later is
+  // cheap: everything explained is cached, so it resumes where this left off.
+  const startedAt = Date.now();
+  let stoppedEarly = false;
+  let attempted = 0;
+
   for (const pos of targets) {
+    const remaining = config.llmBatchBudgetMs - (Date.now() - startedAt);
+    if (attempted > 0 && remaining < 10_000) {
+      stoppedEarly = true;
+      break;
+    }
+    attempted += 1;
+
     try {
-      const out = await aiExplainPosition(explainInputFor(game, pos), connection, aiKeyFor(game, pos));
+      const out = await aiExplainPosition(explainInputFor(game, pos), connection, aiKeyFor(game, pos), {
+        timeoutMs: Math.max(5_000, remaining),
+      });
       results.push({ ply: pos.ply, ...out });
     } catch (e) {
       const kind = e instanceof AiRequestError ? e.kind : "connection";
@@ -111,6 +133,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     results,
     errors,
     analyzed: results.length,
+    stoppedEarly,
+    remaining: stoppedEarly ? targets.length - attempted : 0,
     provider: connection.provider,
     model: results[0]?.model ?? connection.model,
     usage: llmUsage(),

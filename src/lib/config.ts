@@ -50,9 +50,16 @@ export const config = {
   // configures their own providers on the Profiles screen; the key lives in their
   // browser and rides one request, exactly like the Lichess token. The server
   // keeps no LLM secret, so there is nothing to leak from a deployment and no
-  // operator bill to be surprised by. The one value left is the cap on how long a
-  // single provider call may take before it is abandoned.
-  llmTimeoutMs: num(process.env.LLM_TIMEOUT_MS, 30_000),
+  // operator bill to be surprised by.
+  //
+  // Two operational limits are left. A single provider call is capped by
+  // `LLM_TIMEOUT_MS` — two minutes by default, because a reasoning model can
+  // legitimately think for that long, and a connection may raise or lower it.
+  // `LLM_BATCH_BUDGET_MS` bounds a whole request (one move, or every flagged move
+  // in a game): once it is spent the route stops starting new calls and returns
+  // the readings it already has, rather than being killed mid-game.
+  llmTimeoutMs: num(process.env.LLM_TIMEOUT_MS, 120_000),
+  llmBatchBudgetMs: num(process.env.LLM_BATCH_BUDGET_MS, 540_000),
 
   // OKF knowledge base
   okfDir: path.join(process.cwd(), "okf"),

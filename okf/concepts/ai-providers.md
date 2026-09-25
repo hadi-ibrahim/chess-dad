@@ -53,7 +53,7 @@ adding an entry to `src/lib/llm-providers.ts`.
 | `openai` | openai | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `response_format: json_object` |
 | `deepseek` | openai | `https://api.deepseek.com/chat/completions` | `Authorization: Bearer` | `response_format: json_object`; thinking **disabled** unless the connection opts in |
 | `anthropic` | anthropic | `https://api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version` | none — the reply is parsed strictly |
-| `google` | google | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` | `x-goog-api-key` (a header, never `?key=`) | `responseMimeType: application/json` |
+| `google` | google | `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse` | `x-goog-api-key` (a header, never `?key=`) | `responseMimeType: application/json` |
 | `ollama` | ollama | `{base}/api/chat` (default `http://localhost:11434`) | none | `format: json` |
 | `custom` | openai | `{base}/chat/completions` (base URL required) | Bearer if a key is given | none |
 
@@ -135,8 +135,18 @@ same position:
   position (or immediately after the played or engine move) is **discarded**, not
   shown and not cached, and the engine read stays. Measured on real output,
   roughly one in seven explanations that named a move named an impossible one.
-* **Timeout.** One provider call is capped by `LLM_TIMEOUT_MS` (default 30s) and
-  abandoned past it.
+* **Timeout.** One provider call is capped by `LLM_TIMEOUT_MS` — 120s by default,
+  because a reasoning model can legitimately think for that long — and abandoned
+  past it. A connection may override it per provider (Profiles → Timeout, 10–600s),
+  which is the knob for a model that is slower than the default. The call is
+  **streamed** from the provider (SSE for the OpenAI kind, Anthropic and Gemini;
+  NDJSON for Ollama) so a long generation is not indistinguishable from a dead
+  connection; an arbitrary `custom` endpoint, which cannot be assumed to support
+  streaming, stays a single request. A whole request has a second bound:
+  `LLM_BATCH_BUDGET_MS` (9 minutes), after which the route stops starting new calls
+  and returns the readings it already has, so a slow model yields partial results
+  instead of a killed request. Re-running resumes for free, because every position
+  already explained is cached.
 * **No `temperature` for reasoning models.** It is omitted for the o-series,
   GPT-5/GPT-6, `gpt-chat-latest`, `deepseek-reasoner`, and for Anthropic
   entirely: reasoning-class endpoints reject or ignore a non-default value, and

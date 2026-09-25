@@ -198,6 +198,22 @@ export interface LlmConnection {
   baseUrl: string;
   /** DeepSeek only; off unless the user explicitly turns it on. */
   thinking: boolean;
+  /**
+   * Per-call timeout in ms. `0` means "use the server default". This exists
+   * because a reasoning model can legitimately think for minutes, and the person
+   * who chose it is the one who knows how long to wait.
+   */
+  timeoutMs: number;
+}
+
+/** Ten seconds is the shortest worth offering, ten minutes the longest. */
+export const TIMEOUT_MIN_MS = 10_000;
+export const TIMEOUT_MAX_MS = 600_000;
+
+/** Coerce a stored or posted timeout into range; `0` means "use the default". */
+export function clampTimeout(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.min(TIMEOUT_MAX_MS, Math.max(TIMEOUT_MIN_MS, Math.round(ms)));
 }
 
 /** One entry in a provider's model catalogue, as its list endpoint returns it. */
@@ -217,6 +233,7 @@ export function emptyConnection(provider: ProviderId = "openai", id = ""): LlmCo
     apiKey: "",
     baseUrl: "",
     thinking: false,
+    timeoutMs: 0,
   };
 }
 
@@ -245,6 +262,7 @@ export function normaliseConnection(value: unknown): LlmConnection | null {
     apiKey: String(v.apiKey ?? "").slice(0, 400),
     baseUrl: String(v.baseUrl ?? "").slice(0, 300),
     thinking: Boolean(v.thinking),
+    timeoutMs: clampTimeout(Number(v.timeoutMs) || 0),
   };
 }
 
@@ -303,6 +321,7 @@ export function sanitizeConnection(raw: unknown): ConnectionCheck {
       apiKey,
       baseUrl,
       thinking: Boolean(r.thinking),
+      timeoutMs: clampTimeout(Number(r.timeoutMs) || 0),
     },
   };
 }

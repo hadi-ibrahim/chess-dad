@@ -71,7 +71,8 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 | `STOCKFISH_PATH` | `stockfish` | Path to the Stockfish binary |
 | `ANALYSIS_DEPTH` | `14` | Engine depth per position (14 = fast, 18 = deep) |
 | `MAX_GAMES_PER_SOURCE` | `100` | Games fetched per site |
-| `LLM_TIMEOUT_MS` | `30000` | Cap on a single AI provider call (AI is configured per profile, not here) |
+| `LLM_TIMEOUT_MS` | `120000` | Cap on one AI provider call (a connection can override it per provider) |
+| `LLM_BATCH_BUDGET_MS` | `540000` | Cap on a whole AI request; it returns partial results rather than being killed |
 | `LICHESS_TOKEN` | — | Optional; raises rate limits / enables private games |
 | `WORKER_CONCURRENCY` | `min(4, cpus−1)` | Games analysed in parallel by the worker pool |
 | `ENGINE_POOL_SIZE` | `WORKER_CONCURRENCY + 1` | Size of the Stockfish process pool |
@@ -281,6 +282,16 @@ Two things keep this cheap, and both are structural rather than tuning:
   what lets a user compare providers.
 * **Only what the user asks for is explained** — one move, or the flagged ones
   (roughly one position in five).
+
+### When a model is slow
+
+Calls are **streamed** from the provider, so a long generation is no longer
+indistinguishable from a dead connection. Each connection has its own timeout
+(Profiles → Timeout, 10–600s; the default is 120s), which is the knob to turn for
+a reasoning model that thinks for a minute before it answers. A whole-game run
+also has a time budget: when it is spent the route stops and returns the readings
+it already has, and running it again continues from there for free, because every
+position already explained is cached.
 
 The failure mode to watch is not your bill, it is the user's quota: `POST
 /api/games/[id]/ai` spends the caller's own key, so an unauthenticated deployment

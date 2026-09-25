@@ -126,7 +126,8 @@ the deployment, not to a user, and only shows up as `deploymentTokenSet`.
 The same form holds a profile's **AI provider connections**, and they are edited
 with the shared `LlmConnections` component in both "Add a profile" and the inline
 edit. Each connection is a provider, an optional name, a model, an API key, an
-optional base URL, and — for DeepSeek — a reasoning toggle that is off unless
+optional base URL, an optional timeout in seconds (10–600; blank uses the server
+default of 120s), and — for DeepSeek — a reasoning toggle that is off unless
 explicitly enabled. The model field is free text **and** a picker: **Load models**
 fetches what the key can actually reach and shows it as a filterable list, while
 the static suggestions appear as quick picks until then. See

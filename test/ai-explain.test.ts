@@ -2,9 +2,12 @@
  * The AI dispatch: one position, one provider connection, one stored reading.
  *
  * These tests stub `fetch`, so they pin the exact wire shape each provider gets —
- * URL, auth header, and the body fields that matter (JSON mode, DeepSeek's
- * thinking switch) — without ever making a network call or needing a key. They
- * also pin the two refusals that protect the product: a connection error is
+ * URL, auth header, and the body fields that matter (streaming, JSON mode,
+ * DeepSeek's thinking switch) — without ever making a network call or needing a
+ * key. The provider replies are real SSE / NDJSON streams, because that is what
+ * the app now reads: a long generation must not look like a dead connection.
+ *
+ * They also pin the two refusals that protect the product: a connection error is
  * surfaced rather than swallowed, and an answer that names an impossible move is
  * discarded instead of cached.
  */
@@ -38,6 +41,29 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function stream(text: string, contentType: string): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { "Content-Type": contentType } });
+}
+
+/** An OpenAI/Anthropic/Gemini style SSE stream. */
+function sse(events: unknown[]): Response {
+  return stream(
+    events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n",
+    "text/event-stream"
+  );
+}
+
+/** Ollama's newline-delimited JSON stream. */
+function ndjson(events: unknown[]): Response {
+  return stream(events.map((e) => `${JSON.stringify(e)}\n`).join(""), "application/x-ndjson");
+}
+
 /** A legal explanation: e4 and d4 are both playable in the starting position. */
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const EXPLANATION = {
@@ -68,10 +94,11 @@ function connection(overrides: Partial<LlmConnection> = {}): LlmConnection {
     id: "c1",
     provider: "openai",
     label: "",
-    model: "gpt-5",
+    model: "gpt-6-astra",
     apiKey: "sk-test",
     baseUrl: "",
     thinking: false,
+    timeoutMs: 0,
     ...overrides,
   };
 }
@@ -91,12 +118,12 @@ after(() => {
 });
 
 describe("aiExplainPosition", () => {
-  test("OpenAI-compatible: URL, bearer auth, JSON mode and a stored row", async () => {
+  test("OpenAI-compatible: streams from /chat/completions and stores the row", async () => {
     responder = () =>
-      json({
-        choices: [{ message: { content: JSON.stringify(EXPLANATION) } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      });
+      sse([
+        { choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] },
+        { choices: [{ delta: {} }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+      ]);
 
     const out = await llm.aiExplainPosition(input(), connection({ model: "gpt-4.1" }), KEY);
 
@@ -106,6 +133,8 @@ describe("aiExplainPosition", () => {
     assert.equal(headers.Authorization, "Bearer sk-test");
     const body = bodyOf(calls[0]);
     assert.equal(body.model, "gpt-4.1");
+    assert.equal(body.stream, true);
+    assert.deepEqual(body.stream_options, { include_usage: true });
     assert.deepEqual(body.response_format, { type: "json_object" });
     assert.equal(body.temperature, 0.4);
     assert.equal(out.explanation, EXPLANATION.explanation);
@@ -117,10 +146,23 @@ describe("aiExplainPosition", () => {
     assert.equal(stored?.key_lesson, "Central pawns first.");
   });
 
+  test("an explanation split across several deltas is reassembled", async () => {
+    const text = JSON.stringify(EXPLANATION);
+    const half = Math.floor(text.length / 2);
+    responder = () =>
+      sse([
+        { choices: [{ delta: { content: text.slice(0, half) } }] },
+        { choices: [{ delta: { content: text.slice(half) } }] },
+      ]);
+
+    const out = await llm.aiExplainPosition(input(), connection(), KEY);
+    assert.equal(out.explanation, EXPLANATION.explanation);
+  });
+
   test("reasoning-class models omit temperature but still ask for JSON", async () => {
     // GPT-5/GPT-6 reject or ignore a temperature other than the default, so sending
     // it would turn a working provider into a 400.
-    responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
+    responder = () => sse([{ choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] }]);
 
     const out = await llm.aiExplainPosition(input(), connection({ model: "gpt-6-astra" }), KEY);
     const body = bodyOf(calls[0]);
@@ -131,7 +173,7 @@ describe("aiExplainPosition", () => {
   });
 
   test("a second call for the same provider and model is a free cache hit", async () => {
-    responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
+    responder = () => sse([{ choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] }]);
 
     await llm.aiExplainPosition(input(), connection(), KEY);
     const second = await llm.aiExplainPosition(input(), connection(), KEY);
@@ -142,10 +184,10 @@ describe("aiExplainPosition", () => {
   });
 
   test("a different model is a different call, and both readings are kept", async () => {
-    responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
+    responder = () => sse([{ choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] }]);
 
-    await llm.aiExplainPosition(input(), connection({ model: "gpt-5" }), KEY);
-    await llm.aiExplainPosition(input(), connection({ model: "gpt-5-mini" }), KEY);
+    await llm.aiExplainPosition(input(), connection({ model: "gpt-6-astra" }), KEY);
+    await llm.aiExplainPosition(input(), connection({ model: "gpt-6-sol" }), KEY);
 
     assert.equal(calls.length, 2);
     assert.equal(db.listAiExplanationsForFens([START]).length, 2);
@@ -153,7 +195,7 @@ describe("aiExplainPosition", () => {
 
   test("DeepSeek disables thinking unless the connection opts in", async () => {
     const deepseek = connection({ provider: "deepseek", model: "deepseek-chat", baseUrl: "" });
-    responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
+    responder = () => sse([{ choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] }]);
 
     await llm.aiExplainPosition(input(), deepseek, KEY);
     assert.equal(calls[0].url, "https://api.deepseek.com/chat/completions");
@@ -168,12 +210,13 @@ describe("aiExplainPosition", () => {
     assert.equal(bodyOf(calls[0]).temperature, undefined, "thinking ignores temperature");
   });
 
-  test("Anthropic: messages endpoint, x-api-key header, content blocks", async () => {
+  test("Anthropic: streams messages, x-api-key header, content deltas", async () => {
     responder = () =>
-      json({
-        content: [{ type: "text", text: JSON.stringify(EXPLANATION) }],
-        usage: { input_tokens: 20, output_tokens: 8 },
-      });
+      sse([
+        { type: "message_start", message: { usage: { input_tokens: 20 } } },
+        { type: "content_block_delta", delta: { text: JSON.stringify(EXPLANATION) } },
+        { type: "message_delta", usage: { output_tokens: 8 } },
+      ]);
 
     const out = await llm.aiExplainPosition(
       input(),
@@ -186,17 +229,25 @@ describe("aiExplainPosition", () => {
     assert.equal(headers["x-api-key"], "sk-test");
     assert.equal(headers["anthropic-version"], "2023-06-01");
     assert.equal(bodyOf(calls[0]).max_tokens, 1024);
+    assert.equal(bodyOf(calls[0]).stream, true);
     // Claude 5's adaptive thinking rejects a non-default temperature.
     assert.equal(bodyOf(calls[0]).temperature, undefined);
     assert.equal(out.model, "claude-sonnet-5");
+    assert.equal(out.explanation, EXPLANATION.explanation);
   });
 
-  test("Google: the key is a header and never appears in the URL", async () => {
+  test("Google: streams via streamGenerateContent and never puts the key in the URL", async () => {
     responder = () =>
-      json({
-        candidates: [{ content: { parts: [{ text: JSON.stringify(EXPLANATION) }] } }],
-        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 6, totalTokenCount: 18 },
-      });
+      sse([
+        { candidates: [{ content: { parts: [{ text: JSON.stringify(EXPLANATION) }] } }] },
+        {
+          usageMetadata: {
+            promptTokenCount: 12,
+            candidatesTokenCount: 6,
+            totalTokenCount: 18,
+          },
+        },
+      ]);
 
     const out = await llm.aiExplainPosition(
       input(),
@@ -206,15 +257,19 @@ describe("aiExplainPosition", () => {
 
     assert.equal(
       calls[0].url,
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
     );
     assert.ok(!calls[0].url.includes("sk-test"), "the key must not be in the URL");
     assert.equal((calls[0].init.headers as Record<string, string>)["x-goog-api-key"], "sk-test");
     assert.equal(out.explanation, EXPLANATION.explanation);
   });
 
-  test("Ollama: local chat endpoint, no auth, JSON format", async () => {
-    responder = () => json({ message: { content: JSON.stringify(EXPLANATION) }, prompt_eval_count: 9, eval_count: 4 });
+  test("Ollama: streams NDJSON from /api/chat with no auth", async () => {
+    responder = () =>
+      ndjson([
+        { message: { content: JSON.stringify(EXPLANATION) }, done: false },
+        { done: true, prompt_eval_count: 9, eval_count: 4 },
+      ]);
 
     await llm.aiExplainPosition(
       input(),
@@ -223,12 +278,13 @@ describe("aiExplainPosition", () => {
     );
 
     assert.equal(calls[0].url, "http://localhost:11434/api/chat");
-    const headers = calls[0].init.headers as Record<string, string>;
-    assert.equal(headers.Authorization, undefined);
+    assert.equal((calls[0].init.headers as Record<string, string>).Authorization, undefined);
     assert.equal(bodyOf(calls[0]).format, "json");
+    assert.equal(bodyOf(calls[0]).stream, true);
   });
 
-  test("a custom OpenAI-compatible endpoint uses the connection's base URL", async () => {
+  test("a custom endpoint stays a single request and uses its base URL", async () => {
+    // The one endpoint we cannot assume supports streaming.
     responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
 
     await llm.aiExplainPosition(
@@ -242,35 +298,38 @@ describe("aiExplainPosition", () => {
     );
 
     assert.equal(calls[0].url, "https://openrouter.ai/api/v1/chat/completions");
+    assert.equal(bodyOf(calls[0]).stream, undefined);
   });
 
   test("an answer that names an impossible move is refused and never cached", async () => {
     // White's knight is on g1 and cannot reach d5 — the exact shape of the real
     // failures the guard was written for.
     responder = () =>
-      json({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                explanation: "You can simply take it with Nxd5.",
-                key_lesson: "k",
-                drill_suggestion: "d",
-              }),
+      sse([
+        {
+          choices: [
+            {
+              delta: {
+                content: JSON.stringify({
+                  explanation: "You can simply take it with Nxd5.",
+                  key_lesson: "k",
+                  drill_suggestion: "d",
+                }),
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+      ]);
 
     await assert.rejects(
       () => llm.aiExplainPosition(input(), connection(), KEY),
       (e: unknown) => e instanceof llm.AiRequestError && e.kind === "content"
     );
-    assert.equal(db.getAiExplanation(KEY, "openai", "gpt-5"), null);
+    assert.equal(db.getAiExplanation(KEY, "openai", "gpt-6-astra"), null);
   });
 
   test("an empty explanation is a content failure", async () => {
-    responder = () => json({ choices: [{ message: { content: "{}" } }] });
+    responder = () => sse([{ choices: [{ delta: { content: "{}" } }] }]);
     await assert.rejects(
       () => llm.aiExplainPosition(input(), connection(), KEY),
       (e: unknown) => e instanceof llm.AiRequestError && e.kind === "content"
@@ -289,13 +348,18 @@ describe("aiExplainPosition", () => {
         !e.message.includes("sk-test") &&
         e.message.includes("[redacted]")
     );
-    assert.equal(db.getAiExplanation(KEY, "openai", "gpt-5"), null);
+    assert.equal(db.getAiExplanation(KEY, "openai", "gpt-6-astra"), null);
   });
 
-  test("a non-JSON success is a connection failure", async () => {
+  test("a non-JSON success from a one-shot endpoint is a connection failure", async () => {
     responder = () => new Response("<html>nope</html>", { status: 200 });
     await assert.rejects(
-      () => llm.aiExplainPosition(input(), connection(), KEY),
+      () =>
+        llm.aiExplainPosition(
+          input(),
+          connection({ provider: "custom", model: "m", baseUrl: "https://example.com/v1" }),
+          KEY
+        ),
       (e: unknown) => e instanceof llm.AiRequestError && e.kind === "connection"
     );
   });
