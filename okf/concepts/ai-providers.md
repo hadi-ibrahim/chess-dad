@@ -172,6 +172,13 @@ same position:
   and returns the readings it already has, so a slow model yields partial results
   instead of a killed request. Re-running resumes for free, because every position
   already explained is cached.
+* **Transient provider errors are retried.** A 408/409/425/429/5xx — Gemini's 503
+  "This model is currently experiencing high demand" is the common one — is
+  attempted up to three times with exponential backoff and jitter, honouring
+  `Retry-After` when it is sent. Attempts share the call's timeout, so retrying can
+  never push a call past the limit the user set. A 4xx that names a real problem (a
+  bad key, an unknown model id) is not retried, and a 404 says to check the model
+  id with **Load models**.
 * **No `temperature` for reasoning models.** It is omitted for the o-series,
   GPT-5/GPT-6, `gpt-chat-latest`, `deepseek-reasoner`, and for Anthropic
   entirely: reasoning-class endpoints reject or ignore a non-default value, and

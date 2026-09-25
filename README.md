@@ -288,10 +288,12 @@ Two things keep this cheap, and both are structural rather than tuning:
 Calls are **streamed** from the provider, so a long generation is no longer
 indistinguishable from a dead connection. Each connection has its own timeout
 (Profiles → Timeout, 10–600s; the default is 120s), which is the knob to turn for
-a reasoning model that thinks for a minute before it answers. A whole-game run
-also has a time budget: when it is spent the route stops and returns the readings
-it already has, and running it again continues from there for free, because every
-position already explained is cached.
+a reasoning model that thinks for a minute before it answers. Transient provider
+errors — a 503 "high demand" from Gemini, a rate limit, a 5xx — are **retried up
+to three times** with backoff, so a demand spike no longer costs you an
+explanation. A whole-game run also has a time budget: when it is spent the route
+stops and returns the readings it already has, and running it again continues from
+there for free, because every position already explained is cached.
 
 The failure mode to watch is not your bill, it is the user's quota: `POST
 /api/games/[id]/ai` spends the caller's own key, so an unauthenticated deployment

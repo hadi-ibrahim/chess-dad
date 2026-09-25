@@ -103,9 +103,10 @@ export const PROVIDERS: ProviderMeta[] = [
     models: [
       "gemini-3.8-flash",
       "gemini-3.7-flash",
-      "gemini-3.1-pro",
-      "gemini-3-flash",
+      "gemini-3.6-flash",
       "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-flash-lite",
     ],
     keyUrl: "https://aistudio.google.com/app/apikey",
     keyRequired: true,
@@ -113,7 +114,7 @@ export const PROVIDERS: ProviderMeta[] = [
     baseUrlRequired: false,
     supportsJsonMode: true,
     supportsThinkingToggle: false,
-    note: "The key is sent as a header, never in the URL. gemini-3.1-pro and gemini-3-flash are previews.",
+    note: "The key is sent as a header, never in the URL. Flash models can be busy at peak times — retries are automatic, and Load models lists exactly what your key supports.",
   },
   {
     id: "deepseek",

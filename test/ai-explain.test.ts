@@ -418,6 +418,47 @@ describe("aiExplainPosition", () => {
     assert.equal(db.getAiExplanation(KEY, "openai", "gpt-6-astra"), null);
   });
 
+  test("a transient 503 is retried instead of failing the explanation", async () => {
+    // "This model is currently experiencing high demand" is what Gemini returns at
+    // peak; one retry is usually enough and failing the whole reading is not.
+    let attempt = 0;
+    responder = () => {
+      attempt += 1;
+      return attempt === 1
+        ? new Response("high demand", { status: 503 })
+        : sse([{ choices: [{ delta: { content: JSON.stringify(EXPLANATION) } }] }]);
+    };
+
+    const out = await llm.aiExplainPosition(input(), connection(), KEY);
+
+    assert.equal(calls.length, 2);
+    assert.equal(out.explanation, EXPLANATION.explanation);
+    assert.equal(out.cached, false);
+  });
+
+  test("a permanent error is surfaced on the first attempt, not retried", async () => {
+    // An unknown model id or a bad key would fail identically every time.
+    responder = () =>
+      new Response(JSON.stringify({ error: { code: 404, message: "model not found" } }), {
+        status: 404,
+      });
+
+    await assert.rejects(
+      () =>
+        llm.aiExplainPosition(
+          input(),
+          connection({ provider: "google", model: "gemini-nope" }),
+          KEY
+        ),
+      (e: unknown) =>
+        e instanceof llm.AiRequestError &&
+        e.kind === "connection" &&
+        /404/.test(e.message) &&
+        /Load models/.test(e.message)
+    );
+    assert.equal(calls.length, 1);
+  });
+
   test("a non-JSON success from a one-shot endpoint is a connection failure", async () => {
     responder = () => new Response("<html>nope</html>", { status: 200 });
     await assert.rejects(

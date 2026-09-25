@@ -432,6 +432,98 @@ function timeoutMessage(label: string, timeoutMs: number): string {
   );
 }
 
+/**
+ * Statuses worth another attempt: the request never reached a model, or the
+ * provider is momentarily out of capacity. A 503 ("high demand") from Gemini is
+ * the common one, and failing a whole explanation on it is wrong.
+ *
+ * A 4xx that names a real problem (400 bad field, 401 bad key, 404 unknown model)
+ * is never retried — it would fail identically every time.
+ */
+const RETRY_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 800;
+const RETRY_MAX_MS = 10_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Exponential backoff with jitter, so parallel positions do not retry in lockstep. */
+function backoffMs(attempt: number): number {
+  const base = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1));
+  return Math.round(base * (0.75 + Math.random() * 0.5));
+}
+
+/** A provider error, with a nudge when the cause is a model id the key cannot use. */
+function httpError(label: string, status: number, detail: string, secret: string): AiRequestError {
+  const hint =
+    status === 404
+      ? " Check the model id — Load models on the Profiles tab lists what this key supports."
+      : "";
+  return new AiRequestError(
+    `${label} API error ${status}${detail ? `: ${redact(detail, secret)}` : ""}${hint}`,
+    "connection"
+  );
+}
+
+/**
+ * Fetch, retrying a transient status or a network blip.
+ *
+ * Attempts share one deadline, so retrying can never push a call past the timeout
+ * the user set. `Retry-After` is honoured when the provider sends it.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  secret: string,
+  label: string,
+  timeoutMs: number
+): Promise<Response> {
+  const deadline = Date.now() + timeoutMs;
+
+  for (let attempt = 1; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new AiRequestError(timeoutMessage(label, timeoutMs), "connection");
+
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(remaining) });
+    } catch (e) {
+      const err = e as Error;
+      // A timeout is not retried: the model already had its whole budget.
+      if (err.name === "TimeoutError" || err.name === "AbortError") {
+        throw new AiRequestError(timeoutMessage(label, timeoutMs), "connection");
+      }
+      if (attempt < MAX_ATTEMPTS) {
+        const wait = backoffMs(attempt);
+        log.warn("ai: request failed, retrying", { label, attempt, waitMs: wait, err: err.message });
+        await sleep(wait);
+        continue;
+      }
+      throw new AiRequestError(`${label} could not be reached: ${redact(err.message, secret)}`, "connection");
+    }
+
+    if (!res.ok && RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS) {
+      const header = Number(res.headers.get("retry-after"));
+      const wait =
+        Number.isFinite(header) && header > 0
+          ? Math.min(RETRY_MAX_MS, header * 1000)
+          : backoffMs(attempt);
+      log.warn("ai: provider busy, retrying", { label, status: res.status, attempt, waitMs: wait });
+      try {
+        await res.body?.cancel();
+      } catch {
+        // Discarding the failed response is best-effort.
+      }
+      await sleep(wait);
+      continue;
+    }
+
+    return res;
+  }
+}
+
 interface TokenUsage {
   prompt?: number;
   completion?: number;
@@ -450,17 +542,7 @@ async function postJson(
   label: string,
   timeoutMs: number
 ): Promise<unknown> {
-  let res: Response;
-  try {
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    const err = e as Error;
-    const message =
-      err.name === "TimeoutError"
-        ? timeoutMessage(label, timeoutMs)
-        : `${label} could not be reached: ${redact(err.message, secret)}`;
-    throw new AiRequestError(message, "connection");
-  }
+  const res = await fetchWithRetry(url, init, secret, label, timeoutMs);
   if (!res.ok) {
     let detail = "";
     try {
@@ -468,10 +550,7 @@ async function postJson(
     } catch {
       // A body we cannot read is not worth a second failure.
     }
-    throw new AiRequestError(
-      `${label} API error ${res.status}${detail ? `: ${redact(detail, secret)}` : ""}`,
-      "connection"
-    );
+    throw httpError(label, res.status, detail, secret);
   }
   try {
     return (await res.json()) as unknown;
@@ -502,17 +581,7 @@ async function streamProviderResponse(
   timeoutMs: number,
   onLine: (line: string) => void
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    const err = e as Error;
-    const message =
-      err.name === "TimeoutError"
-        ? timeoutMessage(label, timeoutMs)
-        : `${label} could not be reached: ${redact(err.message, secret)}`;
-    throw new AiRequestError(message, "connection");
-  }
+  const res = await fetchWithRetry(url, init, secret, label, timeoutMs);
 
   if (!res.ok) {
     let detail = "";
@@ -521,10 +590,7 @@ async function streamProviderResponse(
     } catch {
       // A body we cannot read is not worth a second failure.
     }
-    throw new AiRequestError(
-      `${label} API error ${res.status}${detail ? `: ${redact(detail, secret)}` : ""}`,
-      "connection"
-    );
+    throw httpError(label, res.status, detail, secret);
   }
   if (!res.body) throw new AiRequestError(`${label} returned an empty response.`, "connection");
 
