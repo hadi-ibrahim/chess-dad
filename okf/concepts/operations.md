@@ -5,8 +5,11 @@ description: How Chess Dad is run — health, logs, backups and the startup sequ
 tags: [operations, deployment, health, logging, backup, docker]
 status: draft
 generated: { by: "process:okf-code-sync", at: 2026-09-24 }
-updated: { by: "process:okf-code-sync", at: 2026-09-24 }
+updated: { by: "process:rate-limiting", at: 2026-09-25 }
 sources:
+  - id: rate-limit-code
+    resource: src/lib/rate-limit.ts
+    title: Chess Dad — the per-IP throttle on the expensive routes
   - id: health-code
     resource: src/lib/health.ts
     title: Chess Dad — health checks and the engine probe
@@ -102,6 +105,36 @@ ordering is the point: an unverified backup is a rumour.
 A snapshot on the same volume is not a real backup. It survives a bad write or a
 mistaken delete, not losing the volume — so `--out` / `BACKUP_DIR` should point at
 a mounted bucket or a synced directory for anything that matters.
+
+# Rate limiting
+
+The app has no accounts, so every route is reachable by anyone with the URL. The
+endpoints that cost real work are throttled per IP, in process
+(`src/lib/rate-limit.ts`):
+
+| Route | Limit |
+|---|---|
+| `POST /api/games/[id]/analyze` | 5 / minute |
+| `POST /api/import` | 5 / minute |
+| `POST /api/jobs` | 30 / minute |
+
+`analyze` is the one that matters: it runs a whole game of Stockfish inside a
+single request, so a loop over sequential game ids used to be a way to occupy the
+engine pool. It is also now **gated** — the caller must have an active profile and
+the game must be in one of its accounts' libraries — matching every other route.
+
+Two honest limits of this:
+
+* It is **best-effort, not a security boundary.** It lives in one process, is
+  keyed on the address the proxy reports, and an attacker with many addresses
+  defeats any per-IP limit. It stops the naive loop and bounds one caller.
+* It **fails open** when no caller address can be determined. A shared "unknown"
+  bucket would let a proxy misconfiguration lock out every user, which is worse
+  than no limit; Railway's proxy sets `x-forwarded-for`, so this is a misconfig
+  path, not a normal one.
+
+Still open before a public launch: a queue-depth cap, so one importer cannot fill
+the queue, and a per-account fair share of worker slots.
 
 # Deployment invariants
 

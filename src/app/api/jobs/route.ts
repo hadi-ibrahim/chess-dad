@@ -12,6 +12,7 @@ import {
 import { getDb } from "@/lib/db";
 import { viewerOf } from "@/lib/library";
 import { ensureWorkerStarted } from "@/lib/worker";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,12 @@ export const dynamic = "force-dynamic";
  * hold the same game share the one job.
  */
 export async function POST(request: Request) {
+  // Enqueuing is cheap, but it is the tap that fills the CPU-bound queue, so it
+  // is throttled per IP. A whole-library run is one request, so a normal user
+  // never notices.
+  const limited = enforceRateLimit(request, "jobs");
+  if (limited) return limited;
+
   const body = (await request.json().catch(() => ({}))) as {
     gameIds?: number[];
     all?: boolean;

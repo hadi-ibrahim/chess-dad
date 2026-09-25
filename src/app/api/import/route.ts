@@ -7,6 +7,7 @@ import { ensureWorkerStarted } from "@/lib/worker";
 import { importLichess } from "@/lib/importers/lichess";
 import { importChessCom } from "@/lib/importers/chesscom";
 import { config } from "@/lib/config";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 /** A throttled anonymous Lichess export can wait out a rate-limit window. */
@@ -36,6 +37,11 @@ interface AccountResult {
  * the part that would blow out a request.
  */
 export async function POST(request: Request) {
+  // Each import fetches up to `MAX_GAMES_PER_SOURCE` games per account and
+  // enqueues their analysis, so it is throttled per IP before any of that work.
+  const limited = enforceRateLimit(request, "import");
+  if (limited) return limited;
+
   const body = (await request.json().catch(() => ({}))) as {
     lichess?: string;
     chesscom?: string;

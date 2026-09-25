@@ -295,10 +295,13 @@ explanation. A whole-game run also has a time budget: when it is spent the route
 stops and returns the readings it already has, and running it again continues from
 there for free, because every position already explained is cached.
 
-The failure mode to watch is not your bill, it is the user's quota: `POST
-/api/games/[id]/ai` spends the caller's own key, so an unauthenticated deployment
-lets any visitor drive it. Put the app behind an access gate (see
-[`PRODUCTION-READINESS.md`](PRODUCTION-READINESS.md)) before exposing it.
+The failure mode to watch is not your bill, it is the user's quota and your CPU:
+`POST /api/games/[id]/ai` spends the caller's own key, while the engine routes
+cost *you*. The app has no accounts, so if you publish the URL, the expensive
+routes are throttled per IP and the synchronous analyze route is gated — see
+[`okf/concepts/operations.md`](okf/concepts/operations.md). For a private
+deployment, put it behind an access gate instead
+([`PRODUCTION-READINESS.md`](PRODUCTION-READINESS.md)).
 
 ## Deploying
 
@@ -307,7 +310,7 @@ the **same pinned Stockfish** as local development (`pnpm run setup:engine`), so
 laptop and production run identical engines. See
 [`docs/updating-stockfish.md`](docs/updating-stockfish.md) for bumping it.
 
-Two things are not optional on a real host:
+Three things are not optional on a real host:
 
 * **A volume.** Point `CHESSDAD_DB_PATH` at a mounted volume
   (`/data/chessdad.db`). The default is `./data/chessdad.db` relative to the
@@ -316,6 +319,11 @@ Two things are not optional on a real host:
   of analysis behind it.
 * **The engine.** `STOCKFISH_PATH`, unless `stockfish` is on `PATH`. Boot logs
   loudly if it cannot start, and `/api/health` returns 503.
+* **Abuse protection, if the URL is public.** The per-IP limits in
+  `src/lib/rate-limit.ts` are in-process and best-effort: they turn a loop over
+  engine-heavy routes into a trickle, and the synchronous analyze route also
+  requires the caller to hold the game. Before a wide launch, also cap queue depth
+  and watch `GET /api/health` for disk and worker health.
 
 | Variable | Default | Purpose |
 |---|---|---|
