@@ -156,19 +156,43 @@ export interface AnalyzeEnqueueOptions {
   generatePuzzles?: boolean;
 }
 
+export interface EnqueueResult {
+  /** Jobs actually written to the queue. */
+  enqueued: number;
+  /** Already had an active job, or repeated within this call. */
+  skipped: number;
+  /** Turned away because the queue is at `MAX_QUEUE_DEPTH`. */
+  rejected: number;
+  /** True when the cap turned work away, so a caller can say so plainly. */
+  capped: boolean;
+}
+
+/** Jobs waiting to be claimed. Running work is bounded by the worker pool. */
+export function queueDepth(): number {
+  const row = getDb().prepare("SELECT COUNT(*) AS n FROM jobs WHERE status='queued'").get() as
+    | { n?: number }
+    | undefined;
+  return Number(row?.n ?? 0);
+}
+
 /** Publish one analysis job per game, skipping games that already have an active job. */
 export function enqueueAnalyzeJobs(
   gameIds: number[],
   opts: AnalyzeEnqueueOptions = {}
-): { enqueued: number; skipped: number } {
+): EnqueueResult {
   const db = getDb();
   const active = db.prepare(
     `SELECT 1 FROM jobs
      WHERE type='analyze' AND status IN ('queued','running')
        AND json_extract(payload, '$.gameId') = ? LIMIT 1`
   );
+  // Backpressure. A full queue turns work away instead of growing without bound;
+  // nothing is lost, because re-running the import re-queues whatever is still
+  // pending once the queue has drained.
+  const headroom = Math.max(0, config.maxQueueDepth - queueDepth());
   const rows: NewJob[] = [];
   let skipped = 0;
+  let rejected = 0;
   // `active` only sees committed rows, so a repeated id *within this call* would
   // otherwise be queued twice — two concurrent analyses of the same game.
   const seen = new Set<number>();
@@ -178,6 +202,10 @@ export function enqueueAnalyzeJobs(
       continue;
     }
     seen.add(gameId);
+    if (rows.length >= headroom) {
+      rejected += 1;
+      continue;
+    }
     const payload: AnalyzePayload = {
       gameId,
       depth: opts.depth ?? null,
@@ -186,7 +214,7 @@ export function enqueueAnalyzeJobs(
     };
     rows.push({ type: "analyze", payload, label: `game ${gameId}`, priority: 0 });
   }
-  return { enqueued: insertJobs(rows).length, skipped };
+  return { enqueued: insertJobs(rows).length, skipped, rejected, capped: rejected > 0 };
 }
 
 // ---------------------------------------------------------------------------

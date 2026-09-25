@@ -39,6 +39,11 @@ export const config = {
   workerPollMs: num(process.env.WORKER_POLL_MS, 750),
   jobLeaseMs: num(process.env.JOB_LEASE_MS, 120_000),
   jobMaxAttempts: num(process.env.JOB_MAX_ATTEMPTS, 2),
+  // How many analysis jobs may wait at once. A public deployment otherwise lets
+  // one importer fill the queue with everything they have and hold worker slots
+  // for hours; past this, work is turned away and the caller is told, rather than
+  // accepting jobs that will not run for a very long time.
+  maxQueueDepth: num(process.env.MAX_QUEUE_DEPTH, 200),
 
   // Import
   maxGamesPerSource: num(process.env.MAX_GAMES_PER_SOURCE, 100),

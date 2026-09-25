@@ -133,8 +133,19 @@ Two honest limits of this:
   than no limit; Railway's proxy sets `x-forwarded-for`, so this is a misconfig
   path, not a normal one.
 
-Still open before a public launch: a queue-depth cap, so one importer cannot fill
-the queue, and a per-account fair share of worker slots.
+# Queue backpressure
+
+Analysis is CPU-bound, so the queue has a ceiling. `MAX_QUEUE_DEPTH` (default
+200) is how many jobs may wait at once; past it `enqueueAnalyzeJobs()` accepts
+only what fits and reports the rest as `rejected` with `capped: true`, and both
+`POST /api/jobs` and `POST /api/import` say so in a `message` instead of quietly
+accepting work that would not run for hours. Nothing is lost — the games are
+already stored, and re-running the import re-queues whatever is still pending once
+the queue drains. `GET /api/health` reports `queue.depth` against
+`queue.capacity`, so a monitor can alert before the ceiling is reached.
+
+Still open: a per-account fair share of worker slots, so one large library cannot
+sit at the front of the queue ahead of everyone else.
 
 # Deployment invariants
 
@@ -148,6 +159,9 @@ the queue, and a per-account fair share of worker slots.
 * **One replica.** The worker pool and the engine pool are per process, and
   `requeueOrphanedJobs()` resets *every* `running` row it finds, so a second replica
   steals the first one's in-flight work. Scale up, not out, until the queue moves
-  off SQLite.
+  off SQLite. A replica that must not consume the queue sets
+  `CHESSDAD_DISABLE_WORKER=1`, which `ensureWorkerStarted()` honours from every
+  caller — not only at boot — so serving a request cannot quietly turn a web-only
+  replica into a consumer.
 * **GPLv3.** Distributing the Stockfish binary in the image carries the licence's
   obligations; its `Copying.txt` is kept beside the binary.

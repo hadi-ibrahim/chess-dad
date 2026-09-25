@@ -55,10 +55,19 @@ function safeProgress(id: number, progress: number, stage: string): void {
   }
 }
 
-/** Start the consumer pool. Idempotent, so any request may call it. */
+/**
+ * Start the consumer pool. Idempotent, so any request may call it.
+ *
+ * The web-only check lives here rather than at boot because every route that
+ * enqueues work also calls this: checking it only in `instrumentation-node.ts`
+ * meant a `CHESSDAD_DISABLE_WORKER=1` replica still became a consumer the moment
+ * anyone hit `/api/jobs`, `/api/jobs/status` or `/api/import` — and two replicas
+ * stealing each other's leases is exactly what the flag exists to prevent.
+ */
 export function ensureWorkerStarted(): void {
   const s = state();
   if (s.started) return;
+  if (process.env.CHESSDAD_DISABLE_WORKER === "1") return;
   s.started = true;
   s.stop = false;
   try {

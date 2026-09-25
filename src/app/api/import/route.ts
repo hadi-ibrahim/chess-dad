@@ -19,6 +19,8 @@ interface AccountResult {
   imported: number;
   /** Games that needed the engine and were queued for it. */
   analysisQueued: number;
+  /** Imported, but the queue was full, so they were not queued yet. */
+  analysisDeferred: number;
   /** Already stored, so only the library link was added. */
   alreadyKnown: number;
   error?: string;
@@ -97,16 +99,26 @@ export async function POST(request: Request) {
 
         // Chain straight into analysis so an import is one action, not two.
         const pending = analyzeAfter ? filterUnanalyzedWithMoves(fetched.gameIds) : [];
-        const { enqueued } = pending.length ? enqueueAnalyzeJobs(pending, {}) : { enqueued: 0 };
+        const queued = pending.length
+          ? enqueueAnalyzeJobs(pending, {})
+          : { enqueued: 0, skipped: 0, rejected: 0, capped: false };
 
         return {
           ...base,
           imported: fetched.count,
-          analysisQueued: enqueued,
+          analysisQueued: queued.enqueued,
+          analysisDeferred: queued.rejected,
           alreadyKnown: fetched.count - fetched.linked,
         };
       } catch (e) {
-        return { ...base, imported: 0, analysisQueued: 0, alreadyKnown: 0, error: (e as Error).message };
+        return {
+          ...base,
+          imported: 0,
+          analysisQueued: 0,
+          analysisDeferred: 0,
+          alreadyKnown: 0,
+          error: (e as Error).message,
+        };
       }
     })
   );
@@ -114,6 +126,7 @@ export async function POST(request: Request) {
   const failed = results.filter((r) => r.error);
   const imported = results.reduce((sum, r) => sum + r.imported, 0);
   const analysisQueued = results.reduce((sum, r) => sum + r.analysisQueued, 0);
+  const analysisDeferred = results.reduce((sum, r) => sum + r.analysisDeferred, 0);
 
   ensureWorkerStarted();
 
@@ -122,6 +135,14 @@ export async function POST(request: Request) {
     accounts: results,
     imported,
     analysisQueued,
+    analysisDeferred,
+    ...(analysisDeferred > 0
+      ? {
+          message:
+            `The analysis queue is full, so ${analysisDeferred} imported game` +
+            `${analysisDeferred === 1 ? " was" : "s were"} not queued yet. Run the import again once it drains.`,
+        }
+      : {}),
     ...getJobStats(viewer.scopes),
   };
 

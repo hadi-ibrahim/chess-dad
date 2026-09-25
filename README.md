@@ -70,7 +70,8 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 |---|---|---|
 | `STOCKFISH_PATH` | `stockfish` | Path to the Stockfish binary |
 | `ANALYSIS_DEPTH` | `14` | Engine depth per position (14 = fast, 18 = deep) |
-| `MAX_GAMES_PER_SOURCE` | `100` | Games fetched per site |
+| `MAX_GAMES_PER_SOURCE` | `100` | Games fetched per site, per account |
+| `MAX_QUEUE_DEPTH` | `200` | Analysis jobs allowed to wait before new work is turned away |
 | `LLM_TIMEOUT_MS` | `120000` | Cap on one AI provider call (a connection can override it per provider) |
 | `LLM_BATCH_BUDGET_MS` | `540000` | Cap on a whole AI request; it returns partial results rather than being killed |
 | `LICHESS_TOKEN` | — | Optional; raises rate limits / enables private games |
@@ -322,8 +323,9 @@ Three things are not optional on a real host:
 * **Abuse protection, if the URL is public.** The per-IP limits in
   `src/lib/rate-limit.ts` are in-process and best-effort: they turn a loop over
   engine-heavy routes into a trickle, and the synchronous analyze route also
-  requires the caller to hold the game. Before a wide launch, also cap queue depth
-  and watch `GET /api/health` for disk and worker health.
+  requires the caller to hold the game. The queue has a ceiling
+  (`MAX_QUEUE_DEPTH`, 200) that turns extra work away instead of accepting it.
+  Watch `GET /api/health` for disk, worker and `queue.depth` vs `queue.capacity`.
 
 | Variable | Default | Purpose |
 |---|---|---|

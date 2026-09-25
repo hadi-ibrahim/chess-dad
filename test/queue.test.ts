@@ -133,7 +133,7 @@ describe("enqueueAnalyzeJobs", () => {
     const g1 = addGame();
     const g2 = addGame();
 
-    assert.deepEqual(queue.enqueueAnalyzeJobs([g1, g2]), { enqueued: 2, skipped: 0 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([g1, g2]), { enqueued: 2, skipped: 0, rejected: 0, capped: false });
 
     const jobs = queue.listJobs();
     assert.equal(jobs.length, 2);
@@ -184,17 +184,17 @@ describe("enqueueAnalyzeJobs", () => {
     const g1 = addGame();
     const g2 = addGame();
 
-    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 1, skipped: 0 });
-    assert.deepEqual(queue.enqueueAnalyzeJobs([g1, g2]), { enqueued: 1, skipped: 1 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 1, skipped: 0, rejected: 0, capped: false });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([g1, g2]), { enqueued: 1, skipped: 1, rejected: 0, capped: false });
 
     // Running blocks too.
     const claimed = claim()!;
     assert.equal(claimed.payload.gameId, g1);
-    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 0, skipped: 1 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 0, skipped: 1, rejected: 0, capped: false });
 
     // A finished job no longer blocks.
     queue.completeJob(claimed.id);
-    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 1, skipped: 0 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([g1]), { enqueued: 1, skipped: 0, rejected: 0, capped: false });
     assert.equal(jobCount(), 3);
   });
 
@@ -206,12 +206,12 @@ describe("enqueueAnalyzeJobs", () => {
     queue.failJob(id, "engine exploded");
     assert.equal(queue.getJob(id)!.status, "failed");
 
-    assert.deepEqual(queue.enqueueAnalyzeJobs([game]), { enqueued: 1, skipped: 0 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([game]), { enqueued: 1, skipped: 0, rejected: 0, capped: false });
   });
 
   test("de-duplicates repeated gameIds within a single call", () => {
     const game = addGame();
-    assert.deepEqual(queue.enqueueAnalyzeJobs([game, game]), { enqueued: 1, skipped: 1 });
+    assert.deepEqual(queue.enqueueAnalyzeJobs([game, game]), { enqueued: 1, skipped: 1, rejected: 0, capped: false });
   });
 });
 
@@ -836,5 +836,26 @@ describe("getJob", () => {
 
   test("an unknown id is null", () => {
     assert.equal(queue.getJob(123456), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker opt-out
+// ---------------------------------------------------------------------------
+
+describe("CHESSDAD_DISABLE_WORKER", () => {
+  test("a web-only replica does not become a consumer when a route enqueues", async () => {
+    // The flag used to be honoured only at boot, so hitting /api/jobs turned a
+    // "web-only" replica into a worker anyway.
+    const worker = await import("@/lib/worker");
+    const previous = process.env.CHESSDAD_DISABLE_WORKER;
+    process.env.CHESSDAD_DISABLE_WORKER = "1";
+    try {
+      worker.ensureWorkerStarted();
+      assert.equal(worker.getWorkerState().started, false);
+    } finally {
+      if (previous === undefined) delete process.env.CHESSDAD_DISABLE_WORKER;
+      else process.env.CHESSDAD_DISABLE_WORKER = previous;
+    }
   });
 });

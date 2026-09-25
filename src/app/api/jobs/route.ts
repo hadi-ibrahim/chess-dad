@@ -13,6 +13,7 @@ import { getDb } from "@/lib/db";
 import { viewerOf } from "@/lib/library";
 import { ensureWorkerStarted } from "@/lib/worker";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { config } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       enqueued: 0,
       skipped: 0,
+      rejected: 0,
+      capped: false,
       ...getJobStats(viewer?.scopes ?? null),
       message: "Nothing to analyze.",
     });
@@ -78,6 +81,13 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ...result,
     requested: gameIds.length,
+    ...(result.capped
+      ? {
+          message:
+            `The analysis queue is full (${config.maxQueueDepth} waiting), so ${result.rejected} ` +
+            `game${result.rejected === 1 ? "" : "s"} were not queued. Run it again once the queue drains.`,
+        }
+      : {}),
     ...getJobStats(viewer?.scopes ?? null),
   });
 }

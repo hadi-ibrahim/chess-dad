@@ -37,7 +37,7 @@ export interface HealthReport {
     worker: Check;
     disk: Check & { freeMb?: number };
   };
-  queue: { queued: number; running: number; failed: number; depth: number };
+  queue: { queued: number; running: number; failed: number; depth: number; capacity: number };
   games: { total: number; analyzed: number; pending: number };
 }
 
@@ -161,7 +161,7 @@ export async function healthReport(): Promise<HealthReport> {
   const db = checkDb();
 
   // The queue reads share the DB connection, so only ask if the DB is usable.
-  let queue = { queued: 0, running: 0, failed: 0, depth: 0 };
+  let queue = { queued: 0, running: 0, failed: 0, depth: 0, capacity: config.maxQueueDepth };
   let games = { total: 0, analyzed: 0, pending: 0 };
   if (db.ok) {
     try {
@@ -171,6 +171,8 @@ export async function healthReport(): Promise<HealthReport> {
         running: stats.jobs.running,
         failed: stats.jobs.failed,
         depth: stats.jobs.queued + stats.jobs.running,
+        // The backpressure ceiling, so a monitor can alert on depth/capacity.
+        capacity: config.maxQueueDepth,
       };
       games = {
         total: stats.games.total,
