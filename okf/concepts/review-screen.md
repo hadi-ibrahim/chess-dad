@@ -92,9 +92,13 @@ coach above is always the baseline and is never replaced; an AI reading is store
 * A cached answer for the *same* provider and model is returned without a request,
   so re-running a provider is free; the notice says how many came from cache.
 * Every reading ever stored for the position is kept and offered as a chip
-  (`Claude · claude-sonnet-4-5`, `GPT · gpt-5`, …). Selecting one shows that text,
-  which is the point of the feature: what Claude said last week stays viewable
-  after GPT answers today.
+  (`Claude · claude-opus-5-5`, `GPT · gpt-6-astra`, …). Selecting one shows that
+  text, which is the point of the feature: what Claude said last week stays
+  viewable after GPT answers today.
+* The wait is shown as elapsed seconds (`Asking… 47s`), because a reasoning model
+  can take a minute. Transient provider errors (a Gemini 503, a rate limit) are
+  retried behind the scenes; a run that reaches its time budget stops and says so,
+  and running it again continues for free from the cache.
 * A generated answer that names a move that is not legal in the position is
   discarded rather than shown or cached — the same guard the offline coach has
   always had. The failure is reported in the panel, and the engine read stays.

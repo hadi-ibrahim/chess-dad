@@ -21,9 +21,10 @@ sources:
 # Overview
 
 Chess Dad follows one invariant: **the engine is ground truth, the coach only
-explains it.** The LLM never evaluates a position; it receives the engine's
-best move and evaluation and is instructed never to contradict them.[^engine-first]
-This prevents hallucinated chess facts while keeping explanations human and
+explains it.** Neither coach — the deterministic one or an AI provider a profile
+configured — ever evaluates a position; both receive the engine's best move and
+evaluation and are instructed never to contradict them.[^engine-first] This
+prevents hallucinated chess facts while keeping explanations human and
 level-calibrated.
 
 # Structure of an explanation
@@ -74,8 +75,8 @@ move, evaluations, classification, motif, opening, and the mover's rating), with
 the same accuracy rules. What differs is the transport: the provider, model and
 API key come from the user's browser profile rather than the environment, and the
 key is used only for the request that carries it. See
-[AI providers](ai-providers.md) for the provider list, the cache key, and the
-failure modes. The illegal-move guard below applies to both.
+[AI providers](ai-providers.md) for the provider list, the cache key, the
+failure modes, and the illegal-move guard that applies to both.
 
 ## Move classification: blunder
 

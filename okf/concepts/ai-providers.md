@@ -19,6 +19,12 @@ sources:
   - id: ai-context
     resource: src/lib/ai-context.ts
     title: Chess Dad — the prompt input and AI cache key derived from a position
+  - id: models-code
+    resource: src/lib/llm-models.ts
+    title: Chess Dad — reading a provider's own model catalogue
+  - id: models-route
+    resource: src/app/api/llm/models/route.ts
+    title: Chess Dad — POST /api/llm/models
   - id: db-code
     resource: src/lib/db.ts
     title: Chess Dad — the ai_explanations table and its migration
@@ -52,7 +58,7 @@ adding an entry to `src/lib/llm-providers.ts`.
 |---|---|---|---|---|
 | `openai` | openai | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `response_format: json_object` |
 | `deepseek` | openai | `https://api.deepseek.com/chat/completions` | `Authorization: Bearer` | `response_format: json_object`; thinking **disabled** unless the connection opts in |
-| `anthropic` | anthropic | `https://api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version` | none — the reply is parsed strictly |
+| `anthropic` | anthropic | `https://api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version` | none — parsed strictly, tolerating a code fence |
 | `google` | google | `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse` | `x-goog-api-key` (a header, never `?key=`) | `responseMimeType: application/json` |
 | `ollama` | ollama | `{base}/api/chat` (default `http://localhost:11434`) | none | `format: json` |
 | `custom` | openai | `{base}/chat/completions` (base URL required) | Bearer if a key is given | none |
@@ -67,8 +73,8 @@ unbounded, and have blown past any sane timeout — paid for and then discarded.
 `POST /api/games/[id]/ai` is the only place the app talks to a provider.
 
 * The body carries the whole connection (provider, model, key, base URL,
-  thinking) and an optional `ply`. No key is ever read from the environment, a
-  cookie, or a table.
+  thinking, and an optional per-provider timeout) and an optional `ply`. No key is
+  ever read from the environment, a cookie, or a table.
 * With `ply` it explains that single position; without it, every flagged position
   in the game — the review screen's "Explain all flagged moves". The run is
   capped at **40 positions**, so one click cannot become an unbounded bill.
@@ -79,6 +85,9 @@ unbounded, and have blown past any sane timeout — paid for and then discarded.
   the run after the first failure when nothing has succeeded yet, because every
   remaining position would fail identically. A **content** failure (an empty
   answer, or one that names an illegal move) does not stop the run.
+* A run that reaches its time budget stops early and says so in the response
+  (`stoppedEarly` with a `remaining` count), returning the readings it has rather
+  than being killed — see the Timeout guard below.
 
 # Listing models
 
