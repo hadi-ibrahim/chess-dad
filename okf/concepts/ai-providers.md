@@ -115,6 +115,11 @@ same position:
   roughly one in seven explanations that named a move named an impossible one.
 * **Timeout.** One provider call is capped by `LLM_TIMEOUT_MS` (default 30s) and
   abandoned past it.
+* **No `temperature` for reasoning models.** It is omitted for the o-series,
+  GPT-5/GPT-6, `gpt-chat-latest`, `deepseek-reasoner`, and for Anthropic
+  entirely: reasoning-class endpoints reject or ignore a non-default value, and
+  Claude 5's adaptive thinking is always on. Omitting it only gives up sampling
+  control, which this coach does not need.
 * **Key hygiene.** A key is sent in an HTTP header or body, never a URL, is
   redacted out of any provider error text before it is shown, and is never
   logged (the logger scrubs credential-shaped fields).

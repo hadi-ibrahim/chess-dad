@@ -98,23 +98,36 @@ describe("aiExplainPosition", () => {
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       });
 
-    const out = await llm.aiExplainPosition(input(), connection(), KEY);
+    const out = await llm.aiExplainPosition(input(), connection({ model: "gpt-4.1" }), KEY);
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://api.openai.com/v1/chat/completions");
     const headers = calls[0].init.headers as Record<string, string>;
     assert.equal(headers.Authorization, "Bearer sk-test");
     const body = bodyOf(calls[0]);
-    assert.equal(body.model, "gpt-5");
+    assert.equal(body.model, "gpt-4.1");
     assert.deepEqual(body.response_format, { type: "json_object" });
     assert.equal(body.temperature, 0.4);
     assert.equal(out.explanation, EXPLANATION.explanation);
     assert.equal(out.provider, "openai");
-    assert.equal(out.model, "gpt-5");
+    assert.equal(out.model, "gpt-4.1");
     assert.equal(out.cached, false);
 
-    const stored = db.getAiExplanation(KEY, "openai", "gpt-5");
+    const stored = db.getAiExplanation(KEY, "openai", "gpt-4.1");
     assert.equal(stored?.key_lesson, "Central pawns first.");
+  });
+
+  test("reasoning-class models omit temperature but still ask for JSON", async () => {
+    // GPT-5/GPT-6 reject or ignore a temperature other than the default, so sending
+    // it would turn a working provider into a 400.
+    responder = () => json({ choices: [{ message: { content: JSON.stringify(EXPLANATION) } }] });
+
+    const out = await llm.aiExplainPosition(input(), connection({ model: "gpt-6-astra" }), KEY);
+    const body = bodyOf(calls[0]);
+    assert.equal(body.model, "gpt-6-astra");
+    assert.deepEqual(body.response_format, { type: "json_object" });
+    assert.equal(body.temperature, undefined);
+    assert.equal(out.model, "gpt-6-astra");
   });
 
   test("a second call for the same provider and model is a free cache hit", async () => {
@@ -164,7 +177,7 @@ describe("aiExplainPosition", () => {
 
     const out = await llm.aiExplainPosition(
       input(),
-      connection({ provider: "anthropic", model: "claude-sonnet-4-5" }),
+      connection({ provider: "anthropic", model: "claude-sonnet-5" }),
       KEY
     );
 
@@ -173,7 +186,9 @@ describe("aiExplainPosition", () => {
     assert.equal(headers["x-api-key"], "sk-test");
     assert.equal(headers["anthropic-version"], "2023-06-01");
     assert.equal(bodyOf(calls[0]).max_tokens, 1024);
-    assert.equal(out.model, "claude-sonnet-4-5");
+    // Claude 5's adaptive thinking rejects a non-default temperature.
+    assert.equal(bodyOf(calls[0]).temperature, undefined);
+    assert.equal(out.model, "claude-sonnet-5");
   });
 
   test("Google: the key is a header and never appears in the URL", async () => {
@@ -185,13 +200,13 @@ describe("aiExplainPosition", () => {
 
     const out = await llm.aiExplainPosition(
       input(),
-      connection({ provider: "google", model: "gemini-2.5-pro" }),
+      connection({ provider: "google", model: "gemini-3.8-flash" }),
       KEY
     );
 
     assert.equal(
       calls[0].url,
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
     );
     assert.ok(!calls[0].url.includes("sk-test"), "the key must not be in the URL");
     assert.equal((calls[0].init.headers as Record<string, string>)["x-goog-api-key"], "sk-test");

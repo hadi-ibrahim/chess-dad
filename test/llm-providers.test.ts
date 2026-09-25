@@ -123,7 +123,7 @@ describe("sanitizeConnection", () => {
   test("fills the provider default model when none is given", () => {
     const out = sanitizeConnection({ provider: "openai", apiKey: "sk-1" });
     assert.equal(out.ok, true);
-    assert.equal(out.ok === true ? out.connection.model : "", "gpt-5");
+    assert.equal(out.ok === true ? out.connection.model : "", "gpt-6-astra");
     assert.equal(out.ok === true ? out.connection.baseUrl : "", "https://api.openai.com/v1");
   });
 

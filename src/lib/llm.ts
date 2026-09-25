@@ -400,6 +400,21 @@ interface ProviderReply {
 }
 
 /**
+ * Models that reject or ignore `temperature`.
+ *
+ * Reasoning-capable endpoints have treated it as unsupported since OpenAI's
+ * o-series, and the current flagships inherit that: the GPT-5/GPT-6 families,
+ * Anthropic's adaptive thinking, and DeepSeek's reasoner. Sending it anyway is a
+ * 400 on some of them, so it is matched by name rather than assumed. Omitting it
+ * only gives up sampling control, which this app never needed.
+ */
+const REASONING_MODEL = /^(o[1-9]|gpt-5|gpt-6|gpt-chat-latest|deepseek-reasoner)/i;
+
+function isReasoningModel(model: string): boolean {
+  return REASONING_MODEL.test(model.trim());
+}
+
+/**
  * Send one position to one provider.
  *
  * This is the only place the app fetches a host derived from user input, and it
@@ -418,15 +433,18 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
 
   switch (meta.kind) {
     case "openai": {
+      // Reasoning-class models reject or ignore `temperature`, and DeepSeek's
+      // thinking mode ignores it too, so it is only sent when it will actually be
+      // honoured rather than pretending to control sampling.
+      const sendTemperature =
+        !isReasoningModel(model) && !(meta.supportsThinkingToggle && connection.thinking);
       const body: Record<string, unknown> = {
         model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        // Thinking mode silently ignores `temperature`, so it is only sent when it
-        // will actually be honoured rather than pretending to control sampling.
-        ...(meta.supportsThinkingToggle && connection.thinking ? {} : { temperature: 0.4 }),
+        ...(sendTemperature ? { temperature: 0.4 } : {}),
       };
       // DeepSeek turns reasoning ON by default upstream and its length is
       // unbounded: one measured call returned 24,699 reasoning tokens over 119s,
@@ -474,7 +492,8 @@ async function callProvider(connection: LlmConnection, i: ExplainInput): Promise
           body: JSON.stringify({
             model,
             max_tokens: 1024,
-            temperature: 0.4,
+            // No temperature: Claude 5's adaptive thinking is always on for the
+            // flagship models, and thinking rejects a temperature other than 1.
             system,
             messages: [{ role: "user", content: user }],
           }),
