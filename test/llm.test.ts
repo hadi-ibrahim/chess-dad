@@ -168,6 +168,22 @@ describe("illegalMovesNamed", () => {
     assert.deepEqual(illegalMovesNamed(text, fen, "Ra4", "Qb3"), []);
   });
 
+  test("reads a piece already on its square as a label, not a named move", () => {
+    // Real Claude output that the guard discarded: "the Nc3/Rd1 battery" names
+    // White's pieces where they already stand, and both look exactly like SAN.
+    const fen = "r1bqk2r/pp1n1ppp/2p2n2/3p4/4PP2/2N1QN2/PPP3PP/2KR1B1R b kq - 0 10";
+    const text =
+      "Castling looks natural, but it lets White keep the initiative. The Nc3/Rd1 battery against d5 stays annoying.";
+    assert.deepEqual(illegalMovesNamed(text, fen, "O-O", "Qb6"), []);
+  });
+
+  test("the label exemption does not weaken the capture guard", () => {
+    // Same position: Bxf4 cannot be played (the bishop cannot reach f4), so a
+    // capture claim must still be rejected.
+    const fen = "r1bqk2r/pp1n1ppp/2p2n2/3p4/4PP2/2N1QN2/PPP3PP/2KR1B1R b kq - 0 10";
+    assert.deepEqual(illegalMovesNamed("You can win with Bxf4.", fen, "O-O", "Qb6"), ["Bxf4"]);
+  });
+
   test("ignores text with no moves at all", () => {
     const out = illegalMovesNamed("Your pieces were uncoordinated and the king was exposed.", input().fen, "Kb1", "Kb2");
     assert.deepEqual(out, []);

@@ -228,12 +228,79 @@ describe("aiExplainPosition", () => {
     const headers = calls[0].init.headers as Record<string, string>;
     assert.equal(headers["x-api-key"], "sk-test");
     assert.equal(headers["anthropic-version"], "2023-06-01");
-    assert.equal(bodyOf(calls[0]).max_tokens, 1024);
+    // Generous on purpose: adaptive thinking is billed against max_tokens, and at
+    // 1024 a real position was cut off before it wrote anything.
+    assert.equal(bodyOf(calls[0]).max_tokens, 8192);
     assert.equal(bodyOf(calls[0]).stream, true);
+    assert.deepEqual(bodyOf(calls[0]).output_config, { effort: "low" });
     // Claude 5's adaptive thinking rejects a non-default temperature.
     assert.equal(bodyOf(calls[0]).temperature, undefined);
     assert.equal(out.model, "claude-sonnet-5");
     assert.equal(out.explanation, EXPLANATION.explanation);
+  });
+
+  test("Anthropic: effort is only sent to the families that accept it", async () => {
+    // Haiku 4.5 rejects output_config.effort with a 400.
+    responder = () =>
+      sse([{ type: "content_block_delta", delta: { text: JSON.stringify(EXPLANATION) } }]);
+
+    await llm.aiExplainPosition(
+      input(),
+      connection({ provider: "anthropic", model: "claude-opus-5-5" }),
+      KEY
+    );
+    assert.deepEqual(bodyOf(calls[0]).output_config, { effort: "low" });
+
+    db.getDb().exec("DELETE FROM ai_explanations");
+    calls = [];
+    await llm.aiExplainPosition(
+      input(),
+      connection({ provider: "anthropic", model: "claude-haiku-4-5-20251001" }),
+      KEY
+    );
+    assert.equal(bodyOf(calls[0]).output_config, undefined);
+  });
+
+  test("a JSON reply wrapped in a markdown fence is still parsed", async () => {
+    // Claude often fences its JSON; showing the fence and the field names instead
+    // of a lesson is what the parser must not do.
+    responder = () =>
+      sse([
+        { type: "content_block_delta", delta: { text: "```json\n" } },
+        { type: "content_block_delta", delta: { text: JSON.stringify(EXPLANATION) } },
+        { type: "content_block_delta", delta: { text: "\n```" } },
+      ]);
+
+    const out = await llm.aiExplainPosition(
+      input(),
+      connection({ provider: "anthropic", model: "claude-opus-5-5" }),
+      KEY
+    );
+    assert.equal(out.explanation, EXPLANATION.explanation);
+    assert.equal(out.key_lesson, "Central pawns first.");
+  });
+
+  test("an answer lost to the output budget says so instead of 'no explanation'", async () => {
+    responder = () =>
+      sse([
+        { type: "content_block_delta", delta: { thinking: "long silent reasoning" } },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "max_tokens" },
+          usage: { output_tokens: 8192 },
+        },
+      ]);
+
+    await assert.rejects(
+      () =>
+        llm.aiExplainPosition(
+          input(),
+          connection({ provider: "anthropic", model: "claude-opus-5-5" }),
+          KEY
+        ),
+      (e: unknown) => e instanceof llm.AiRequestError && /output budget/.test(e.message)
+    );
+    assert.equal(db.getAiExplanation(KEY, "anthropic", "claude-opus-5-5"), null);
   });
 
   test("Google: streams via streamGenerateContent and never puts the key in the URL", async () => {

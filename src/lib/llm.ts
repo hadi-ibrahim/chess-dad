@@ -148,10 +148,40 @@ function buildUserPrompt(i: ExplainInput): string {
  *   * only unambiguous MOVE tokens are judged, so a bare square reference
  *     ("your queen on b5") is not mistaken for a named move — this under-reports;
  *   * a move is accepted if it is legal in the given position, or after the played
- *     move, or after the engine's move, so legitimate continuations pass.
+ *     move, or after the engine's move, so legitimate continuations pass;
+ *   * a non-capture token that names a piece already standing on that square
+ *     ("the Nc3/Rd1 battery") is read as a label rather than a move; real generated
+ *     text was being discarded for exactly this before the exemption was added.
  */
 const MOVE_TOKEN =
   /\b(?:O-O-O|O-O|[KQRBN][a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|[a-h]x[a-h][1-8](?:=[QRBN])?[+#]?)\b/g;
+
+/**
+ * Is this token naming a piece that is already standing on that square?
+ *
+ * "the Nc3/Rd1 battery" describes where White's pieces are, not moves — but it
+ * looks exactly like SAN, and the guard used to throw the whole explanation away
+ * over it. A non-capture token whose destination already holds a piece of the
+ * same kind cannot be a legal move anyway, so it is read as a label instead.
+ *
+ * Captures are still judged, and that keeps what the guard is actually for: every
+ * real hallucination it was written against named a capture ("Nxd5", "Qxb3",
+ * "Nxc2"), and a capture can never be mistaken for a piece label.
+ */
+function namesPieceOnSquare(token: string, fen: string): boolean {
+  const core = token.replace(/[+#]$/, "");
+  if (core.includes("x") || core.includes("=")) return false;
+  const piece = core[0]?.toUpperCase();
+  if (!piece || !"KQRBN".includes(piece)) return false;
+  const dest = core.slice(-2);
+  if (!/^[a-h][1-8]$/.test(dest)) return false;
+  try {
+    const found = new Chess(fen).get(dest as never);
+    return Boolean(found && found.type.toUpperCase() === piece);
+  } catch {
+    return false;
+  }
+}
 
 export function illegalMovesNamed(
   text: string,
@@ -189,24 +219,54 @@ export function illegalMovesNamed(
     }
   }
 
-  return named.filter((token) => !legal.has(token));
+  return named.filter((token) => !legal.has(token) && !namesPieceOnSquare(token, fen));
+}
+
+/**
+ * Pull the JSON object out of a model's reply.
+ *
+ * Models do not always return bare JSON. Claude in particular likes to wrap it in
+ * a ```json fence, and either provider may add a sentence around it. Returning
+ * the raw text in that case is not harmless: the review screen would show the
+ * fence and the field names instead of a lesson. So the fence is stripped and a
+ * brace-delimited object is extracted before giving up.
+ */
+function tryParseObject(text: string): Partial<LLMExplanation> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? (parsed as Partial<LLMExplanation>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function stripFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function extractObject(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : "";
 }
 
 function parseExplanation(content: string): LLMExplanation {
-  try {
-    const obj = JSON.parse(content) as Partial<LLMExplanation>;
+  const stripped = stripFence(content);
+  const obj = tryParseObject(stripped) ?? tryParseObject(extractObject(stripped));
+  if (obj) {
     return {
       explanation: String(obj.explanation ?? "").trim() || "No explanation available.",
       key_lesson: String(obj.key_lesson ?? "").trim(),
       drill_suggestion: String(obj.drill_suggestion ?? "").trim(),
     };
-  } catch {
-    return {
-      explanation: content.trim().slice(0, 600) || "No explanation available.",
-      key_lesson: "",
-      drill_suggestion: "",
-    };
   }
+  return {
+    explanation: content.trim().slice(0, 600) || "No explanation available.",
+    key_lesson: "",
+    drill_suggestion: "",
+  };
 }
 
 const MATE_CP = 10_000; // the engine's mate scores are stored as +/-100000 cp
@@ -515,6 +575,14 @@ function isReasoningModel(model: string): boolean {
 }
 
 /**
+ * Claude families that accept `output_config.effort`.
+ *
+ * Haiku 4.5 rejects it outright (a 400), and pre-5 models have no adaptive
+ * thinking to steer, so this is gated by name rather than sent optimistically.
+ */
+const EFFORT_MODEL = /^claude-(opus|sonnet|fable)-(5|[6-9])/i;
+
+/**
  * Send one position to one provider.
  *
  * This is the only place the app fetches a host derived from user input, and it
@@ -636,6 +704,7 @@ async function callProvider(
 
     case "anthropic": {
       let text = "";
+      let stopReason: string | null = null;
       const usage: TokenUsage = {};
       await streamProviderResponse(
         `${base}/messages`,
@@ -648,7 +717,15 @@ async function callProvider(
           },
           body: JSON.stringify({
             model,
-            max_tokens: 1024,
+            // Claude 5 thinks before it answers, and that thinking is billed against
+            // `max_tokens`. At 1024 a real position was cut off mid-JSON — or the
+            // whole budget went on thinking and no answer was written at all — so
+            // this is deliberately generous for a 2-3 sentence reply.
+            max_tokens: 8192,
+            // Where adaptive thinking is available, effort is the recommended
+            // control, and `low` stops the model over-thinking engine output it was
+            // told to trust. Only the families that accept it get sent it.
+            ...(EFFORT_MODEL.test(model) ? { output_config: { effort: "low" } } : {}),
             // No temperature: Claude 5's adaptive thinking is always on for the
             // flagship models, and thinking rejects a temperature other than 1.
             system,
@@ -665,7 +742,7 @@ async function callProvider(
           if (!payload) return;
           let event: {
             type?: string;
-            delta?: { text?: string };
+            delta?: { text?: string; stop_reason?: string };
             message?: { usage?: { input_tokens?: number } };
             usage?: { output_tokens?: number };
           };
@@ -678,9 +755,18 @@ async function callProvider(
             text += event.delta.text;
           }
           if (event.type === "message_start") usage.prompt = event.message?.usage?.input_tokens;
-          if (event.type === "message_delta") usage.completion = event.usage?.output_tokens;
+          if (event.type === "message_delta") {
+            usage.completion = event.usage?.output_tokens;
+            stopReason = event.delta?.stop_reason ?? stopReason;
+          }
         }
       );
+      if (!text.trim() && stopReason === "max_tokens") {
+        throw new AiRequestError(
+          "Claude used its whole output budget thinking and never wrote an answer. Try another Claude model.",
+          "content"
+        );
+      }
       recordUsage(meta.id, model, usage);
       return { text: text.trim(), model };
     }

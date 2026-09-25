@@ -102,6 +102,27 @@ for this one call and stored nowhere; the base URL goes through the same
 validation the analysis route uses, so this cannot probe a host the other route
 would refuse.
 
+# Anthropic specifics
+
+Claude needs two things the other providers do not, both learned from real calls
+against a position in this library:
+
+* **`max_tokens` is 8192.** Claude 5's adaptive thinking is billed against that
+  budget. At the original 1024, a real position spent the whole allowance before
+  writing an answer — the app received no text at all and reported "returned no
+  explanation" — or was cut off mid-JSON. For a 2–3 sentence reply, 8192 leaves
+  ample room for thinking plus answer.
+* **`output_config.effort: "low"` is sent to the Claude 5 families** (Opus, Sonnet
+  and Fable 5), because the engine has already done the analysis and the model was
+  told to trust it. Haiku 4.5 rejects `effort` with a 400, and pre-5 models have no
+  adaptive thinking to steer, so it is gated by model name (`EFFORT_MODEL`).
+* **A JSON reply may be wrapped in a markdown code fence.** The parser strips a
+  fence and extracts a brace-delimited object before giving up, so a fenced answer
+  is a lesson rather than a wall of field names.
+
+If a Claude answer is still lost, the app now says the output budget was spent
+instead of the unhelpful "returned no explanation".
+
 # Where the answer lives
 
 Each answer is one row in `ai_explanations`, and several rows may exist for the
@@ -134,7 +155,11 @@ same position:
 * **Illegal-move guard.** Generated text that names a move not legal in the
   position (or immediately after the played or engine move) is **discarded**, not
   shown and not cached, and the engine read stays. Measured on real output,
-  roughly one in seven explanations that named a move named an impossible one.
+  roughly one in seven explanations that named a move named an impossible one. A
+  non-capture token that names a piece already standing on that square ("the
+  Nc3/Rd1 battery") is read as a **label** rather than a move — real generated text
+  was being thrown away for exactly that — while captures are still judged, which
+  is what every measured hallucination actually was.
 * **Timeout.** One provider call is capped by `LLM_TIMEOUT_MS` — 120s by default,
   because a reasoning model can legitimately think for that long — and abandoned
   past it. A connection may override it per provider (Profiles → Timeout, 10–600s),
