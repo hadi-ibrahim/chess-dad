@@ -5,7 +5,7 @@ description: How Chess Dad is run — health, logs, backups and the startup sequ
 tags: [operations, deployment, health, logging, backup, docker]
 status: draft
 generated: { by: "process:okf-code-sync", at: 2026-09-24 }
-updated: { by: "process:rate-limiting", at: 2026-09-25 }
+updated: { by: "process:backup-startup-snapshot", at: 2026-10-18 }
 sources:
   - id: rate-limit-code
     resource: src/lib/rate-limit.ts
@@ -97,6 +97,15 @@ as `{}`), and any field whose **key** looks like a credential is replaced with
 `VACUUM INTO` takes a consistent snapshot of a live database in one statement, with
 no downtime, that stands alone (no WAL to replay). `src/lib/backup.ts` runs it on a
 timer; `scripts/backup-db.mjs` does the same thing from the command line.
+
+The timer is created at boot, so **every deploy restarts it**. An install that
+redeploys more often than `BACKUP_INTERVAL_MS` therefore never reached its first
+tick and wrote no snapshots at all — retention was configured and unused. A second
+trigger closes that gap: `runStartupBackupIfStale()` runs about five seconds after
+boot and writes a snapshot **only when the newest one is already older than the
+interval**, so a deploy-heavy day produces one snapshot per interval rather than
+one per deploy, and an ordinary restart writes nothing. `BACKUP_INTERVAL_MS=0`
+disables it along with the timer.
 
 Every snapshot is **reopened and checked with `PRAGMA integrity_check` before
 older copies are pruned**, so a corrupt backup can never displace a good one. That

@@ -68,6 +68,37 @@ function existingBackups(dir: string): string[] {
   }
 }
 
+/** Milliseconds since the newest snapshot was written, or null when there is none. */
+function newestBackupAgeMs(dir: string, now: number): number | null {
+  const all = existingBackups(dir);
+  if (all.length === 0) return null;
+  try {
+    return now - fs.statSync(all[0]).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Take a snapshot when the newest one is older than the interval.
+ *
+ * The periodic timer is the only production trigger, and it is created at boot —
+ * so every deploy restarts the clock. An install that redeploys every couple of
+ * hours therefore never reached its first tick and `/data/backups` stayed empty,
+ * however many snapshots retention allowed. This runs once shortly after boot and
+ * writes only when nothing recent exists, so a deploy-heavy day produces one
+ * snapshot per interval rather than one per deploy.
+ *
+ * `BACKUP_INTERVAL_MS=0` disables the scheduler, and this honours that too.
+ */
+export function runStartupBackupIfStale(now = Date.now()): BackupResult | null {
+  const every = intervalMs();
+  if (every === 0) return null;
+  const age = newestBackupAgeMs(backupDir(), now);
+  if (age !== null && age < every) return null;
+  return runBackup("startup");
+}
+
 // Single-flight: a slow backup must not be joined by the next tick.
 let running = false;
 
@@ -155,6 +186,9 @@ export function runBackup(reason = "scheduled"): BackupResult {
 
 const globalForBackup = globalThis as unknown as { __chessdadBackupTimer?: NodeJS.Timeout };
 
+/** How long after boot the startup snapshot runs, so it does not delay readiness. */
+const STARTUP_BACKUP_DELAY_MS = 5_000;
+
 /** Start the periodic snapshot. Idempotent, and a no-op when disabled. */
 export function startBackupScheduler(): void {
   if (globalForBackup.__chessdadBackupTimer) return;
@@ -170,10 +204,25 @@ export function startBackupScheduler(): void {
   timer.unref?.();
   globalForBackup.__chessdadBackupTimer = timer;
 
+  // The timer restarts with the process, so on an install that redeploys more
+  // often than `every` it would never fire at all. Take the first snapshot after
+  // boot instead, once the server answers its health check and the engine pool is
+  // up. `runStartupBackupIfStale` is a no-op when a recent snapshot already
+  // exists, so ordinary restarts do not write an extra copy.
+  const kickoff = setTimeout(() => {
+    try {
+      runStartupBackupIfStale();
+    } catch (e) {
+      log.warn("backup: startup snapshot failed", { err: e });
+    }
+  }, STARTUP_BACKUP_DELAY_MS);
+  kickoff.unref?.();
+
   log.info("backup: scheduler started", {
     everyMs: every,
     dir: backupDir(),
     retention: retention(),
+    startupInMs: STARTUP_BACKUP_DELAY_MS,
   });
 }
 

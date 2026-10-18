@@ -25,7 +25,8 @@ process.env.CHESSDAD_DB_PATH = dbPath;
 process.env.BACKUP_DIR = backups;
 process.env.BACKUP_RETENTION = "2";
 
-const { runBackup, backupDir, backupRetention } = await import("@/lib/backup");
+const { runBackup, runStartupBackupIfStale, backupDir, backupRetention, backupIntervalMs } =
+  await import("@/lib/backup");
 const { getDb, upsertGame } = await import("@/lib/db");
 
 /** A snapshot file, opened read-only. */
@@ -150,6 +151,66 @@ describe("runBackup", () => {
       check.close();
     }
     getDb(); // keep the connection referenced
+  });
+});
+
+describe("runStartupBackupIfStale", () => {
+  /**
+   * The periodic timer is created at boot, so a deployment restarts it: an
+   * install redeployed more often than `every` never took a single snapshot.
+   * These tests pin the boot-time catch-up, including that an ordinary restart
+   * does not write an extra copy.
+   */
+  const dir = path.join(workdir, "startup-backups");
+  const snapshots = () =>
+    fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".db")).sort() : [];
+  let saved: string | undefined;
+
+  before(() => {
+    saved = process.env.BACKUP_DIR;
+    process.env.BACKUP_DIR = dir; // its own directory — do not disturb the counts above
+  });
+
+  after(() => {
+    if (saved === undefined) delete process.env.BACKUP_DIR;
+    else process.env.BACKUP_DIR = saved;
+  });
+
+  test("takes the first snapshot when the directory is empty", () => {
+    assert.equal(snapshots().length, 0);
+    const result = runStartupBackupIfStale();
+    assert.ok(result, "an empty backup directory should be snapshotted at boot");
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(snapshots().length, 1);
+  });
+
+  test("stays out of the way when the newest snapshot is recent", () => {
+    const result = runStartupBackupIfStale();
+    assert.equal(result, null, "a recent snapshot means there is nothing to do");
+    assert.equal(snapshots().length, 1, "no extra copy should be written");
+  });
+
+  test("takes one when the newest snapshot is older than the interval", () => {
+    const [newest] = snapshots().reverse();
+    const old = Date.now() - backupIntervalMs() - 60_000;
+    fs.utimesSync(path.join(dir, newest), old / 1000, old / 1000);
+
+    const result = runStartupBackupIfStale();
+    assert.ok(result, "a stale directory should be snapshotted");
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(snapshots().length, 2);
+  });
+
+  test("does nothing when the scheduler is disabled", () => {
+    const savedInterval = process.env.BACKUP_INTERVAL_MS;
+    process.env.BACKUP_INTERVAL_MS = "0";
+    try {
+      assert.equal(runStartupBackupIfStale(), null, "BACKUP_INTERVAL_MS=0 disables backups entirely");
+      assert.equal(snapshots().length, 2);
+    } finally {
+      if (savedInterval === undefined) delete process.env.BACKUP_INTERVAL_MS;
+      else process.env.BACKUP_INTERVAL_MS = savedInterval;
+    }
   });
 });
 

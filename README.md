@@ -239,7 +239,11 @@ pnpm run backup -- --list
 ```
 
 The same snapshot runs on a timer in-process (`BACKUP_INTERVAL_MS`, default 6h;
-`BACKUP_INTERVAL_MS=0` disables it). Every snapshot is reopened and checked with
+`BACKUP_INTERVAL_MS=0` disables it) and once shortly after boot when the newest
+snapshot is already older than that interval. The second trigger exists because
+the timer is created at startup, so every deploy restarts it: before that, an
+install redeployed more often than `BACKUP_INTERVAL_MS` never reached its first
+tick and wrote no snapshots at all. Every snapshot is reopened and checked with
 `PRAGMA integrity_check` **before** older copies are pruned, so a corrupt backup
 can never displace a good one.
 
