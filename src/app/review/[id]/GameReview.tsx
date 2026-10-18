@@ -468,10 +468,12 @@ export default function GameReview({ id }: { id: string }) {
   const activeReading =
     aiReadings.find((r) => `${r.provider}|${r.model}` === aiView) ?? aiReadings[0] ?? null;
 
-  // Show the position BEFORE the selected move: the engine's suggested move and
-  // the move actually played both start from here. Showing fen_after put the
-  // green arrow on a square the piece had already left.
-  const boardFen = current ? current.fen : positions[0]?.fen ?? START_FEN;
+  // Show the position AFTER the selected move, so choosing a move applies it on
+  // the board in the same step: the piece the coach is talking about is already
+  // where the move put it, and the eval bar describes the position on screen.
+  // The arrows still start from the squares in the pre-move `fen` — the played
+  // move's origin is now empty, which is why the arrow is what marks it.
+  const boardFen = current ? current.fen_after || current.fen : positions[0]?.fen ?? START_FEN;
 
   const whiteEval = useMemo(() => {
     if (positions.length === 0) return null;

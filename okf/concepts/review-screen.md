@@ -5,7 +5,7 @@ description: How the per-game review screen flags critical moves, separates the 
 tags: [review, ui, classification, critical-moments, coaching]
 status: draft
 generated: { by: "process:okf-code-sync", at: 2026-09-23 }
-updated: { by: "process:ai-providers", at: 2026-09-25 }
+updated: { by: "process:review-board-after-move", at: 2026-10-18 }
 sources:
   - id: review-screen-code
     resource: "src/app/review/[id]/GameReview.tsx"
@@ -30,13 +30,16 @@ selected move, the list of critical moments, and the full move list.
 
 # What the board shows
 
-The board renders the position **before** the selected move (`positions[ply].fen`,
-not `fen_after`), so the engine's suggested move and the move actually played
-both start from the square the piece still occupies. The played move is drawn as
-an arrow in the move's classification colour, with the destination square
-outlined and the classification glyph marked on it; when the engine preferred a
-different move and the move is an error, that best move is drawn as a green
-arrow.
+The board renders the position **after** the selected move
+(`positions[ply].fen_after`), so selecting a ply applies that move on the board
+in the same step: the piece is where the move put it and the evaluation bar
+describes the position on screen. The played move is still drawn as an arrow in
+the move's classification colour, starting from the square the piece left (now
+empty), with the destination square outlined and the classification glyph marked
+on it; when the engine preferred a different move and the move is an error, that
+best move is drawn as a green arrow. Arrow geometry is measured from the
+pre-move FEN (`positions[ply].fen`), and the starting position (ply −1) uses
+`positions[0].fen`.
 
 # Critical moments
 
